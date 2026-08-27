@@ -50,7 +50,7 @@ export default function Home() {
   }, []);
 
   const assignableUsers = useMemo(() => {
-    const matches = users.filter(user => /alex|neel/i.test(`${user.name} ${user.username}`));
+    const matches = users.filter(user => /alex|neel|uma/i.test(`${user.name} ${user.username}`));
     return matches.length ? matches : users;
   }, [users]);
 
@@ -207,7 +207,7 @@ export default function Home() {
           </header>
 
           <div style={{ background: 'rgba(255, 255, 255, 0.86)', border: `1px solid ${colors.border}`, borderRadius: '14px', padding: '12px 16px', marginBottom: '18px', textAlign: 'center', color: colors.blueDeep, fontSize: '14px', fontWeight: '600' }}>
-            April Request Form → Monday.com → Alex/Neel Proposal Form 💬
+            April Request Form → Monday.com → Alex, Neel, or Uma Proposal Form 💬
           </div>
 
           {usersError && (
@@ -243,7 +243,7 @@ export default function Home() {
 
                 <label htmlFor="assignedToId" style={{ display: 'block', marginBottom: '7px', fontWeight: '700' }}>Assign Proposal To *</label>
                 <select id="assignedToId" name="assignedToId" value={form.assignedToId} onChange={updateForm} disabled={usersLoading || assignableUsers.length === 0} style={{ ...fieldStyle, marginBottom: '18px', appearance: 'auto' }} required>
-                  <option value="">{usersLoading ? 'Loading team members...' : 'Select Alex or Neel'}</option>
+                  <option value="">{usersLoading ? 'Loading team members...' : 'Select Alex, Neel, or Uma'}</option>
                   {assignableUsers.map(user => <option key={user.userId} value={user.userId}>{user.name}</option>)}
                 </select>
 
@@ -262,7 +262,7 @@ export default function Home() {
           )}
 
           <p style={{ textAlign: 'center', color: colors.brownSoft, fontSize: '12px', marginTop: '18px', fontWeight: '600' }}>
-            Alex and Neel can complete the proposal form from their unique Slack link.
+            Alex, Neel, and Uma can complete the proposal form from their unique Slack link.
           </p>
         </div>
       </main>
