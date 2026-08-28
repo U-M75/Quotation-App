@@ -1,5 +1,10 @@
 import { createProposalToken } from '../../../lib/token';
-import { getSlackMention, postToSlack } from '../../../lib/slack';
+
+import {
+  getSlackMention,
+  postToSlack,
+} from '../../../lib/slack';
+
 import {
   createProjectItem,
   ensureBoardWebhook,
@@ -11,11 +16,24 @@ function today() {
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
-    return res.status(405).json({ success: false, error: 'Method not allowed' });
+    return res.status(405).json({
+      success: false,
+      error: 'Method not allowed',
+    });
   }
 
-  const { projectName, assignedToId, assignedToName, description } = req.body || {};
-  if (!projectName?.trim() || !assignedToId || !description?.trim()) {
+  const {
+    projectName,
+    assignedToId,
+    assignedToName,
+    description,
+  } = req.body || {};
+
+  if (
+    !projectName?.trim() ||
+    !assignedToId ||
+    !description?.trim()
+  ) {
     return res.status(400).json({
       success: false,
       error: 'Project name, assignee, and project description are required',
@@ -23,6 +41,7 @@ export default async function handler(req, res) {
   }
 
   const appBaseUrl = process.env.APP_BASE_URL?.trim();
+
   if (!appBaseUrl) {
     return res.status(500).json({
       success: false,
@@ -46,15 +65,24 @@ export default async function handler(req, res) {
       assignedToName: assignedToName || assignedToId,
       expiresAt: Date.now() + (30 * 24 * 60 * 60 * 1000),
     });
-    const proposalLink = `${appBaseUrl.replace(/\/$/, '')}/proposal/${token}`;
+
+    const proposalLink =
+      `${appBaseUrl.replace(/\/$/, '')}/proposal/${token}`;
 
     try {
       await ensureBoardWebhook(created.boardId);
     } catch (error) {
-      console.warn('Monday webhook registration skipped:', error.message);
+      console.warn(
+        'Monday webhook registration skipped:',
+        error.message
+      );
     }
 
-    const mention = getSlackMention(assignedToId) || assignedToName || 'the assigned team member';
+    const mention =
+      getSlackMention(assignedToId) ||
+      assignedToName ||
+      'the assigned team member';
+
     const slackMessage = `📝 *New Quotation Request*
 
 *Project:* ${projectName.trim()}
@@ -76,8 +104,14 @@ ${proposalLink}`;
       message: 'Quotation request created successfully',
     });
   } catch (error) {
-    console.error('Create quotation request error:', error.message);
-    return res.status(500).json({ success: false, error: error.message });
+    console.error(
+      'Create quotation request error:',
+      error.message
+    );
+
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+    });
   }
 }
-
