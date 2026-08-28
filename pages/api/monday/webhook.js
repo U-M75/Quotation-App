@@ -10,6 +10,7 @@ export default async function handler(req, res) {
 
   const body = req.body || {};
 
+  // Monday webhook verification
   if (body.challenge) {
     return res.status(200).json({
       challenge: body.challenge,
@@ -42,7 +43,11 @@ export default async function handler(req, res) {
         event.columnId ||
         'Monday.com',
 
-      // Keep the actual time when Monday says the change happened.
+      // Save both values from the Monday webhook.
+      previousValue: event.previousValue ?? null,
+      newValue: event.value ?? null,
+
+      // Monday's event timestamp.
       changedAt:
         event.changedAt ||
         event.timestamp ||
