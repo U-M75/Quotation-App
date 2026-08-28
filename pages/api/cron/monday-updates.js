@@ -7,11 +7,7 @@ import { getProjectItem } from '../../../lib/monday';
 import { postToSlack } from '../../../lib/slack';
 
 function extractValue(value) {
-  if (
-    value === null ||
-    value === undefined ||
-    value === ''
-  ) {
+  if (value === null || value === undefined || value === '') {
     return 'Empty';
   }
 
@@ -19,21 +15,14 @@ function extractValue(value) {
     return value;
   }
 
-  if (
-    typeof value === 'number' ||
-    typeof value === 'boolean'
-  ) {
+  if (typeof value === 'number' || typeof value === 'boolean') {
     return String(value);
   }
 
   if (Array.isArray(value)) {
-    if (!value.length) {
-      return 'Empty';
-    }
-
-    return value
-      .map(extractValue)
-      .join(', ');
+    return value.length
+      ? value.map(extractValue).join(', ')
+      : 'Empty';
   }
 
   if (typeof value === 'object') {
@@ -63,41 +52,85 @@ function extractValue(value) {
   return String(value);
 }
 
+function getItemColumn(item, pending) {
+  return item?.column_values?.find(column => (
+    (pending.columnId && column.id === pending.columnId) ||
+    (pending.columnTitle &&
+      column.column?.title === pending.columnTitle)
+  ));
+}
+
+function getCurrentColumnValue(item, pending) {
+  const column = getItemColumn(item, pending);
+
+  if (!column) {
+    return 'Empty';
+  }
+
+  if (
+    column.text !== undefined &&
+    column.text !== null &&
+    column.text !== ''
+  ) {
+    return column.text;
+  }
+
+  try {
+    return extractValue(JSON.parse(column.value || ''));
+  } catch {
+    return 'Empty';
+  }
+}
+
+function getProjectStatus(item) {
+  const statusColumn = item?.column_values?.find(column => (
+    column.column?.title?.trim().toLowerCase() === 'project status'
+  ));
+
+  return statusColumn?.text || '';
+}
+
 function formatDate(value) {
   if (!value) {
     return '';
   }
 
-  const dateString = String(value);
+  if (typeof value === 'number') {
+    const milliseconds =
+      value < 100000000000
+        ? value * 1000
+        : value;
 
-  // ISO date: 2026-08-29
-  const match = dateString.match(
-    /^(\d{4})-(\d{2})-(\d{2})/
-  );
+    const date = new Date(milliseconds);
 
-  if (match) {
-    const [, year, month, day] = match;
+    if (!Number.isNaN(date.getTime())) {
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      const year = String(date.getFullYear()).slice(-2);
 
-    return `${month}/${day}/${year.slice(-2)}`;
+      return `${month}/${day}/${year}`;
+    }
   }
 
-  const date = new Date(value);
+  const dateString = String(value);
+
+  const isoMatch = dateString.match(
+    /^(\\d{4})-(\\d{2})-(\\d{2})/
+  );
+
+  if (isoMatch) {
+    return `${isoMatch[2]}/${isoMatch[3]}/${isoMatch[1].slice(-2)}`;
+  }
+
+  const date = new Date(dateString);
 
   if (Number.isNaN(date.getTime())) {
     return dateString;
   }
 
-  const month = String(
-    date.getMonth() + 1
-  ).padStart(2, '0');
-
-  const day = String(
-    date.getDate()
-  ).padStart(2, '0');
-
-  const year = String(
-    date.getFullYear()
-  ).slice(-2);
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const year = String(date.getFullYear()).slice(-2);
 
   return `${month}/${day}/${year}`;
 }
@@ -110,13 +143,11 @@ export default async function handler(req, res) {
     });
   }
 
-  const cronSecret =
-    process.env.CRON_SECRET?.trim();
+  const cronSecret = process.env.CRON_SECRET?.trim();
 
   if (
     cronSecret &&
-    req.headers.authorization !==
-      `Bearer ${cronSecret}`
+    req.headers.authorization !== `Bearer ${cronSecret}`
   ) {
     return res.status(401).json({
       success: false,
@@ -134,10 +165,7 @@ export default async function handler(req, res) {
 
     for (const pending of due) {
       try {
-        const item =
-          await getProjectItem(
-            pending.itemId
-          );
+        const item = await getProjectItem(pending.itemId);
 
         if (!item) {
           await removeMondayUpdate(
@@ -148,40 +176,76 @@ export default async function handler(req, res) {
           continue;
         }
 
-        const oldValue =
-          extractValue(
-            pending.previousValue
+        // Fetch the current value from Monday after the delay.
+        // This prevents blank or stale webhook values.
+        const oldValue = extractValue(
+          pending.previousValue
+        );
+
+        const newValue = getCurrentColumnValue(
+          item,
+          pending
+        );
+
+        const projectStatus = getProjectStatus(
+          item
+        ).toLowerCase();
+
+        const isStatusChange =
+          pending.columnTitle
+            ?.trim()
+            .toLowerCase() === 'project status' ||
+          item.column_values?.some(column =>
+            column.id === pending.columnId &&
+            column.column?.title === 'Project Status'
           );
 
-        const newValue =
-          extractValue(
-            pending.newValue
-          );
+        const changedDate = formatDate(
+          pending.changedAt ||
+          pending.receivedAt
+        );
 
-        const changedDate =
-          formatDate(
-            pending.changedAt ||
-            pending.receivedAt
-          );
+        const mondayLink = item.url
+          ? `<${item.url}|Open Monday Item>`
+          : 'Monday item unavailable';
 
-        const mondayLink =
-          item.url
-            ? `<${item.url}|Open Monday Item>`
-            : 'Monday item unavailable';
+        let message;
 
-        const message = `🔄 *Monday.com Project Update*
+        if (
+          isStatusChange &&
+          projectStatus === 'completed'
+        ) {
+          message = `🏁 *Project Ended*
+
+*Project Name:* ${item.name}
+*Project ID:* ${item.id}
+*Project Status:* Completed
+*Date:* ${changedDate}
+*Monday Item:* ${mondayLink}`;
+        } else if (
+          isStatusChange &&
+          projectStatus === 'in progress'
+        ) {
+          message = `🚀 *Project Started*
+
+*Project Name:* ${item.name}
+*Project ID:* ${item.id}
+*Project Status:* In Progress
+*Date:* ${changedDate}
+*Monday Item:* ${mondayLink}`;
+        } else {
+          message = `🔄 *Monday.com Project Update*
 
 *Project Name:* ${item.name}
 *Project ID:* ${item.id}
 
 *Changed Field:* ${pending.columnTitle}
-
 *Old Value:* ${oldValue}
 *New Value:* ${newValue}
-
 *Date:* ${changedDate}
 
 *Monday Item:* ${mondayLink}`;
+        }
 
         await postToSlack(message);
 
@@ -196,14 +260,15 @@ export default async function handler(req, res) {
           `Monday update ${pending.itemId} failed:`,
           error.message
         );
+
+        // Keep the update in Redis so the next run can retry it.
       }
     }
 
     return res.status(200).json({
       success: true,
       processed,
-      queued:
-        due.length - processed,
+      queued: due.length - processed,
     });
   } catch (error) {
     console.error(
