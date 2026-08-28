@@ -18,6 +18,7 @@ export default async function handler(req, res) {
   }
 
   const event = body.event || {};
+
   const itemId = event.pulseId || event.itemId;
 
   if (!itemId) {
@@ -28,27 +29,44 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Queue the update with 15-minute delay
-    // The queue is now in-memory, so no Redis errors
     await queueMondayUpdate({
       itemId: String(itemId),
-      boardId: event.boardId ? String(event.boardId) : '',
+
+      boardId: event.boardId
+        ? String(event.boardId)
+        : '',
+
       columnId: event.columnId || '',
-      columnTitle: event.columnTitle || event.columnId || 'Monday.com',
+
+      columnTitle:
+        event.columnTitle ||
+        event.columnId ||
+        'Monday.com',
+
+      // Save both values from the Monday webhook.
       previousValue: event.previousValue ?? null,
       newValue: event.value ?? null,
-      changedAt: event.changedAt || event.timestamp || new Date().toISOString(),
+
+      // Monday's event timestamp.
+      changedAt:
+        event.changedAt ||
+        event.timestamp ||
+        new Date().toISOString(),
+
       receivedAt: new Date().toISOString(),
     });
 
-    // ✅ Always return 200 so Monday doesn't think automation failed
+    // ✅ ALWAYS return 200 so Monday doesn't think automation failed
     return res.status(200).json({
       success: true,
       queued: true,
       message: 'Update queued successfully. Slack notification will be sent in 15 minutes.',
     });
   } catch (error) {
-    console.error('Monday webhook queue error:', error.message);
+    console.error(
+      'Monday webhook queue error:',
+      error.message
+    );
 
     // Still return 200 to avoid Monday automation failures
     // Log the error for monitoring
