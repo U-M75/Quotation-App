@@ -159,7 +159,6 @@ export default async function handler(req, res) {
     const { due } = await getDueMondayUpdates();
 
     let processed = 0;
-    let errors = 0;
 
     for (const pending of due) {
       try {
@@ -167,12 +166,24 @@ export default async function handler(req, res) {
 
         if (!item) {
           await removeMondayUpdate(pending.itemId);
+
           continue;
         }
 
-        const oldValue = extractValue(pending.previousValue);
-        const newValue = getCurrentColumnValue(item, pending);
-        const projectStatus = getProjectStatus(item).toLowerCase();
+        // Fetch the current value from Monday after the delay.
+        // This prevents blank or stale webhook values.
+        const oldValue = extractValue(
+          pending.previousValue
+        );
+
+        const newValue = getCurrentColumnValue(
+          item,
+          pending
+        );
+
+        const projectStatus = getProjectStatus(
+          item
+        ).toLowerCase();
 
         const isStatusChange =
           pending.columnTitle
@@ -184,7 +195,8 @@ export default async function handler(req, res) {
           );
 
         const changedDate = formatDate(
-          pending.changedAt || pending.receivedAt
+          pending.changedAt ||
+          pending.receivedAt
         );
 
         const mondayLink = item.url
@@ -230,6 +242,7 @@ export default async function handler(req, res) {
         }
 
         await postToSlack(message);
+
         await removeMondayUpdate(pending.itemId);
 
         processed += 1;
@@ -238,18 +251,21 @@ export default async function handler(req, res) {
           `Monday update ${pending.itemId} failed:`,
           error.message
         );
-        errors += 1;
+
+        // Keep the update in memory so the next run can retry it.
       }
     }
 
     return res.status(200).json({
       success: true,
       processed,
-      failed: errors,
-      queued: due.length - processed - errors,
+      queued: due.length - processed,
     });
   } catch (error) {
-    console.error('Monday cron error:', error.message);
+    console.error(
+      'Monday cron error:',
+      error.message
+    );
 
     return res.status(500).json({
       success: false,
