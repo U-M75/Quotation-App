@@ -60,7 +60,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       success: true,
       queued: true,
-      message: 'Update queued successfully. Slack notification will be sent in 15 minutes.',
+      message: 'Update queued successfully. Slack notification will be sent in 2 minutes.',
     });
   } catch (error) {
     console.error(
