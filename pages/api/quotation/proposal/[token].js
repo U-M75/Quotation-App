@@ -116,6 +116,11 @@ export default async function handler(req, res) {
         fields.projectStatus
       ).trim();
 
+    const quotation =
+      firstValue(
+        fields.quotation
+      ).trim();
+        
     const proposalPdf =
       getProposalPdf(
         files.proposalPdf
