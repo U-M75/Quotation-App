@@ -158,13 +158,17 @@ export default async function handler(req, res) {
   try {
     const { due } = await getDueMondayUpdates();
 
+    console.log(`📊 Cron job started. Found ${due.length} due updates`);
+
     let processed = 0;
 
     for (const pending of due) {
       try {
+        console.log(`⏳ Processing update for item ${pending.itemId}`);
         const item = await getProjectItem(pending.itemId);
 
         if (!item) {
+          console.warn(`⚠️ Item ${pending.itemId} not found, removing from queue`);
           await removeMondayUpdate(pending.itemId);
 
           continue;
@@ -245,6 +249,8 @@ export default async function handler(req, res) {
 
         await removeMondayUpdate(pending.itemId);
 
+        console.log(`✅ Successfully processed and notified for item ${pending.itemId}`);
+
         processed += 1;
       } catch (error) {
         console.error(
@@ -260,10 +266,11 @@ export default async function handler(req, res) {
       success: true,
       processed,
       queued: due.length - processed,
+      timestamp: new Date().toISOString(),
     });
   } catch (error) {
     console.error(
-      'Monday cron error:',
+      '❌ Monday cron error:',
       error.message
     );
 
