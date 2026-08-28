@@ -115,7 +115,7 @@ function formatDate(value) {
   const dateString = String(value);
 
   const isoMatch = dateString.match(
-    /^(\\d{4})-(\\d{2})-(\\d{2})/
+    /^(\d{4})-(\d{2})-(\d{2})/
   );
 
   if (isoMatch) {
@@ -156,40 +156,23 @@ export default async function handler(req, res) {
   }
 
   try {
-    const {
-      redis,
-      due,
-    } = await getDueMondayUpdates();
+    const { due } = await getDueMondayUpdates();
 
     let processed = 0;
+    let errors = 0;
 
     for (const pending of due) {
       try {
         const item = await getProjectItem(pending.itemId);
 
         if (!item) {
-          await removeMondayUpdate(
-            redis,
-            pending.itemId
-          );
-
+          await removeMondayUpdate(pending.itemId);
           continue;
         }
 
-        // Fetch the current value from Monday after the delay.
-        // This prevents blank or stale webhook values.
-        const oldValue = extractValue(
-          pending.previousValue
-        );
-
-        const newValue = getCurrentColumnValue(
-          item,
-          pending
-        );
-
-        const projectStatus = getProjectStatus(
-          item
-        ).toLowerCase();
+        const oldValue = extractValue(pending.previousValue);
+        const newValue = getCurrentColumnValue(item, pending);
+        const projectStatus = getProjectStatus(item).toLowerCase();
 
         const isStatusChange =
           pending.columnTitle
@@ -201,8 +184,7 @@ export default async function handler(req, res) {
           );
 
         const changedDate = formatDate(
-          pending.changedAt ||
-          pending.receivedAt
+          pending.changedAt || pending.receivedAt
         );
 
         const mondayLink = item.url
@@ -248,11 +230,7 @@ export default async function handler(req, res) {
         }
 
         await postToSlack(message);
-
-        await removeMondayUpdate(
-          redis,
-          pending.itemId
-        );
+        await removeMondayUpdate(pending.itemId);
 
         processed += 1;
       } catch (error) {
@@ -260,21 +238,18 @@ export default async function handler(req, res) {
           `Monday update ${pending.itemId} failed:`,
           error.message
         );
-
-        // Keep the update in Redis so the next run can retry it.
+        errors += 1;
       }
     }
 
     return res.status(200).json({
       success: true,
       processed,
-      queued: due.length - processed,
+      failed: errors,
+      queued: due.length - processed - errors,
     });
   } catch (error) {
-    console.error(
-      'Monday cron error:',
-      error.message
-    );
+    console.error('Monday cron error:', error.message);
 
     return res.status(500).json({
       success: false,
