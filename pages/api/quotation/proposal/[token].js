@@ -1,6 +1,6 @@
 import { IncomingForm } from 'formidable';
 import { verifyProposalToken } from '../../../../lib/token';
-import { getSlackMention, postToSlack } from '../../../../lib/slack';
+import { findSlackUser, getSlackMention, postToSlack } from '../../../../lib/slack';
 import {
   addFileToColumn,
   buildColumnValues,
@@ -111,18 +111,21 @@ export default async function handler(req, res) {
     }
 
     const item = await getProjectItem(tokenPayload.itemId);
-    const mention = getSlackMention(tokenPayload.assignedToId) || tokenPayload.assignedToName;
-    await postToSlack(`📄 *Proposal Submitted*
+    const notifyName = process.env.QUOTATION_RESPONSE_NOTIFY_USER_NAME?.trim() || 'Uma';
+    const notifyUser = process.env.QUOTATION_RESPONSE_NOTIFY_USER_ID?.trim()
+      ? { userId: process.env.QUOTATION_RESPONSE_NOTIFY_USER_ID.trim() }
+      : await findSlackUser(notifyName);
+    const notifyMention = getSlackMention(notifyUser?.userId) || notifyName;
+    const mondayLink = `https://monday.com/boards/${tokenPayload.boardId}/pulses/${tokenPayload.itemId}`;
 
-*Project:* ${tokenPayload.projectName}
+    // Keep proposal responses private. Slack receives only a short notification,
+    // not estimated hours, deadlines, decisions, or PDF details.
+    await postToSlack(`✅ *Quotation Response Received*
+
+${notifyMention}, a quotation response has been submitted for your request.
+*Project Name:* ${tokenPayload.projectName}
 *Project ID:* ${tokenPayload.itemId}
-*Submitted by:* ${mention}
-*Estimated Hours:* ${estimatedHours}
-*Deadline:* ${deadlineDate}
-*Decision Status:* ${decisionStatus}
-*Decision Date:* ${decisionDate}
-*Project Status:* ${projectStatus}
-${proposalPdf ? '*Proposal PDF:* Attached to Monday.com' : ''}`);
+*Monday Item:* ${mondayLink}`);
 
     return res.status(200).json({
       success: true,
