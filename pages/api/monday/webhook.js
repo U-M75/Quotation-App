@@ -17,6 +17,7 @@ export default async function handler(req, res) {
   }
 
   const event = body.event || {};
+
   const itemId = event.pulseId || event.itemId;
 
   if (!itemId) {
@@ -29,11 +30,24 @@ export default async function handler(req, res) {
   try {
     await queueMondayUpdate({
       itemId: String(itemId),
+
       boardId: event.boardId
         ? String(event.boardId)
         : '',
+
       columnId: event.columnId || '',
-      columnTitle: event.columnTitle || event.columnId || 'Monday.com',
+
+      columnTitle:
+        event.columnTitle ||
+        event.columnId ||
+        'Monday.com',
+
+      // Keep the actual time when Monday says the change happened.
+      changedAt:
+        event.changedAt ||
+        event.timestamp ||
+        new Date().toISOString(),
+
       receivedAt: new Date().toISOString(),
     });
 
@@ -42,7 +56,10 @@ export default async function handler(req, res) {
       queued: true,
     });
   } catch (error) {
-    console.error('Monday webhook queue error:', error.message);
+    console.error(
+      'Monday webhook queue error:',
+      error.message
+    );
 
     return res.status(500).json({
       success: false,
