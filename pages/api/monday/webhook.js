@@ -1,16 +1,4 @@
-import { postToSlack } from '../../../lib/slack';
-import { getProjectItem } from '../../../lib/monday';
-
-function getColumnText(item, title) {
-  const value = item?.column_values?.find(column => column.column?.title === title);
-  return value?.text || '';
-}
-
-function eventValueText(value) {
-  if (!value) return '';
-  if (typeof value === 'string') return value;
-  return value.label?.text || value.text || value.date || value.number || '';
-}
+import { queueMondayUpdate } from '../../../lib/queue';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -29,42 +17,19 @@ export default async function handler(req, res) {
   if (!itemId) return res.status(200).json({ success: true, ignored: true });
 
   try {
-    const item = await getProjectItem(itemId);
-    if (!item) return res.status(200).json({ success: true, ignored: true });
+    // Store the event and wait 15 minutes. The cron worker fetches the current
+    // Monday value later, avoiding the blank-value race immediately after edits.
+    await queueMondayUpdate({
+      itemId: String(itemId),
+      boardId: event.boardId ? String(event.boardId) : '',
+      columnId: event.columnId || '',
+      columnTitle: event.columnTitle || event.columnId || 'Monday.com',
+      receivedAt: new Date().toISOString(),
+    });
 
-    const changedColumn = event.columnTitle || event.columnId || 'Monday.com';
-    const changedValue = eventValueText(event.value) || getColumnText(item, changedColumn) || 'Updated';
-    const projectStatus = getColumnText(item, 'Project Status');
-    const isProjectStatus = changedColumn.toLowerCase().includes('project status') || event.columnId === 'project_status';
-    const status = projectStatus.toLowerCase();
-
-    let message;
-    if (isProjectStatus && status === 'completed') {
-      message = `🏁 *Project Ended*
-
-*Project Name:* ${item.name}
-*Project ID:* ${item.id}
-*Project Status:* Completed`;
-    } else if (isProjectStatus && status === 'in progress') {
-      message = `🚀 *Project Started*
-
-*Project Name:* ${item.name}
-*Project ID:* ${item.id}
-*Project Status:* In Progress`;
-    } else {
-      message = `🔄 *Monday.com Project Update*
-
-*Project Name:* ${item.name}
-*Project ID:* ${item.id}
-*Changed Field:* ${changedColumn}
-*New Value:* ${changedValue}`;
-    }
-
-    await postToSlack(message);
-    return res.status(200).json({ success: true });
+    return res.status(200).json({ success: true, queued: true });
   } catch (error) {
-    console.error('Monday webhook error:', error.message);
-    // Return 200 so monday.com does not repeatedly retry a non-critical notification.
-    return res.status(200).json({ success: false, error: error.message });
+    console.error('Monday webhook queue error:', error.message);
+    return res.status(500).json({ success: false, error: error.message });
   }
 }
