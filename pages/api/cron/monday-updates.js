@@ -6,39 +6,100 @@ import {
 import { getProjectItem } from '../../../lib/monday';
 import { postToSlack } from '../../../lib/slack';
 
-function valueForColumn(item, pending) {
-  const column = item?.column_values?.find(value => (
-    (pending.columnId &&
-      value.id === pending.columnId) ||
-    (pending.columnTitle &&
-      value.column?.title === pending.columnTitle)
-  ));
+function extractValue(value) {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ''
+  ) {
+    return 'Empty';
+  }
 
-  return column?.text || 'Updated';
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  if (
+    typeof value === 'number' ||
+    typeof value === 'boolean'
+  ) {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    if (!value.length) {
+      return 'Empty';
+    }
+
+    return value
+      .map(extractValue)
+      .join(', ');
+  }
+
+  if (typeof value === 'object') {
+    if (value.label !== undefined) {
+      return extractValue(value.label);
+    }
+
+    if (value.text !== undefined) {
+      return extractValue(value.text);
+    }
+
+    if (value.date !== undefined) {
+      return extractValue(value.date);
+    }
+
+    if (value.name !== undefined) {
+      return extractValue(value.name);
+    }
+
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+
+  return String(value);
 }
 
-function formatDate(dateValue) {
-  if (!dateValue) {
+function formatDate(value) {
+  if (!value) {
     return '';
   }
 
-  const dateString = String(dateValue);
+  const dateString = String(value);
 
-  // Keep the original calendar date from the ISO value
-  // instead of converting timezone and accidentally changing the day.
-  const datePart = dateString.slice(0, 10);
-
-  const match = datePart.match(
-    /^(\d{4})-(\d{2})-(\d{2})$/
+  // ISO date: 2026-08-29
+  const match = dateString.match(
+    /^(\d{4})-(\d{2})-(\d{2})/
   );
 
-  if (!match) {
+  if (match) {
+    const [, year, month, day] = match;
+
+    return `${month}/${day}/${year.slice(-2)}`;
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
     return dateString;
   }
 
-  const [, year, month, day] = match;
+  const month = String(
+    date.getMonth() + 1
+  ).padStart(2, '0');
 
-  return `${month}/${day}/${year.slice(-2)}`;
+  const day = String(
+    date.getDate()
+  ).padStart(2, '0');
+
+  const year = String(
+    date.getFullYear()
+  ).slice(-2);
+
+  return `${month}/${day}/${year}`;
 }
 
 export default async function handler(req, res) {
@@ -64,82 +125,63 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { redis, due } =
-      await getDueMondayUpdates();
+    const {
+      redis,
+      due,
+    } = await getDueMondayUpdates();
 
     let processed = 0;
 
     for (const pending of due) {
       try {
         const item =
-          await getProjectItem(pending.itemId);
+          await getProjectItem(
+            pending.itemId
+          );
 
         if (!item) {
           await removeMondayUpdate(
             redis,
             pending.itemId
           );
+
           continue;
         }
 
-        const changedValue =
-          valueForColumn(item, pending);
+        const oldValue =
+          extractValue(
+            pending.previousValue
+          );
 
-        const projectStatus =
-          valueForColumn(item, {
-            columnTitle: 'Project Status',
-          });
+        const newValue =
+          extractValue(
+            pending.newValue
+          );
 
-        const isStatusChange =
-          pending.columnId === 'project_status' ||
-          pending.columnTitle === 'Project Status';
+        const changedDate =
+          formatDate(
+            pending.changedAt ||
+            pending.receivedAt
+          );
 
-        const status =
-          projectStatus.toLowerCase();
+        const mondayLink =
+          item.url
+            ? `<${item.url}|Open Monday Item>`
+            : 'Monday item unavailable';
 
-        const changedDate = formatDate(
-          pending.changedAt ||
-          pending.receivedAt
-        );
-
-        const mondayLink = item.url
-          ? `<${item.url}|Open Monday Item>`
-          : '';
-
-        let message;
-
-        if (
-          isStatusChange &&
-          status === 'completed'
-        ) {
-          message = `🏁 *Project Ended*
+        const message = `🔄 *Monday.com Project Update*
 
 *Project Name:* ${item.name}
 *Project ID:* ${item.id}
-*Project Status:* Completed
-*Date:* ${changedDate}
-${mondayLink ? `*Monday Item:* ${mondayLink}` : ''}`;
-        } else if (
-          isStatusChange &&
-          status === 'in progress'
-        ) {
-          message = `🚀 *Project Started*
 
-*Project Name:* ${item.name}
-*Project ID:* ${item.id}
-*Project Status:* In Progress
-*Date:* ${changedDate}
-${mondayLink ? `*Monday Item:* ${mondayLink}` : ''}`;
-        } else {
-          message = `🔄 *Monday.com Project Update*
-
-*Project Name:* ${item.name}
-*Project ID:* ${item.id}
 *Changed Field:* ${pending.columnTitle}
-*New Value:* ${changedValue}
+
+*Old Value:* ${oldValue}
+*New Value:* ${newValue}
+
 *Date:* ${changedDate}
-${mondayLink ? `*Monday Item:* ${mondayLink}` : ''}`;
-        }
+
+*Monday Item:* ${mondayLink}`;
 
         await postToSlack(message);
 
@@ -160,7 +202,8 @@ ${mondayLink ? `*Monday Item:* ${mondayLink}` : ''}`;
     return res.status(200).json({
       success: true,
       processed,
-      queued: due.length - processed,
+      queued:
+        due.length - processed,
     });
   } catch (error) {
     console.error(
