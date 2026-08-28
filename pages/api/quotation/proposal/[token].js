@@ -1,6 +1,13 @@
 import { IncomingForm } from 'formidable';
+
 import { verifyProposalToken } from '../../../../lib/token';
-import { findSlackUser, getSlackMention, postToSlack } from '../../../../lib/slack';
+
+import {
+  findSlackUser,
+  getSlackMention,
+  postToSlack,
+} from '../../../../lib/slack';
+
 import {
   addFileToColumn,
   buildColumnValues,
@@ -25,25 +32,41 @@ function parseMultipartForm(req) {
     });
 
     form.parse(req, (error, fields, files) => {
-      if (error) reject(error);
-      else resolve({ fields, files });
+      if (error) {
+        reject(error);
+      } else {
+        resolve({ fields, files });
+      }
     });
   });
 }
 
 function firstValue(value) {
-  return Array.isArray(value) ? value[0] || '' : value || '';
+  return Array.isArray(value)
+    ? value[0] || ''
+    : value || '';
 }
 
 function getProposalPdf(value) {
-  if (!value) return null;
-  return Array.isArray(value) ? value[0] : value;
+  if (!value) {
+    return null;
+  }
+
+  return Array.isArray(value)
+    ? value[0]
+    : value;
 }
 
 export default async function handler(req, res) {
-  const tokenPayload = verifyProposalToken(req.query.token);
+  const tokenPayload =
+    verifyProposalToken(req.query.token);
+
   if (!tokenPayload) {
-    return res.status(401).json({ success: false, error: 'This proposal link is invalid or expired' });
+    return res.status(401).json({
+      success: false,
+      error:
+        'This proposal link is invalid or expired',
+    });
   }
 
   if (req.method === 'GET') {
@@ -58,28 +81,72 @@ export default async function handler(req, res) {
   }
 
   if (req.method !== 'POST') {
-    return res.status(405).json({ success: false, error: 'Method not allowed' });
+    return res.status(405).json({
+      success: false,
+      error: 'Method not allowed',
+    });
   }
 
   try {
-    const { fields, files } = await parseMultipartForm(req);
-    const estimatedHours = firstValue(fields.estimatedHours).trim();
-    const deadlineDate = firstValue(fields.deadlineDate).trim();
-    const decisionStatus = firstValue(fields.decisionStatus).trim();
-    const decisionDate = firstValue(fields.decisionDate).trim();
-    const projectStatus = firstValue(fields.projectStatus).trim();
-    const proposalPdf = getProposalPdf(files.proposalPdf);
+    const { fields, files } =
+      await parseMultipartForm(req);
 
-    if (!estimatedHours || !deadlineDate || !decisionStatus || !decisionDate || !projectStatus) {
+    const estimatedHours =
+      firstValue(
+        fields.estimatedHours
+      ).trim();
+
+    const deadlineDate =
+      firstValue(
+        fields.deadlineDate
+      ).trim();
+
+    const decisionStatus =
+      firstValue(
+        fields.decisionStatus
+      ).trim();
+
+    const decisionDate =
+      firstValue(
+        fields.decisionDate
+      ).trim();
+
+    const projectStatus =
+      firstValue(
+        fields.projectStatus
+      ).trim();
+
+    const proposalPdf =
+      getProposalPdf(
+        files.proposalPdf
+      );
+
+    if (
+      !estimatedHours ||
+      !deadlineDate ||
+      !decisionStatus ||
+      !decisionDate ||
+      !projectStatus
+    ) {
       return res.status(400).json({
         success: false,
-        error: 'Estimated hours, deadline, decision, decision date, and project status are required',
+        error:
+          'Estimated hours, deadline, decision, decision date, and project status are required',
       });
     }
 
-    const board = await ensureBoardAndColumns();
-    if (String(board.boardId) !== String(tokenPayload.boardId)) {
-      return res.status(400).json({ success: false, error: 'The proposal link belongs to another board' });
+    const board =
+      await ensureBoardAndColumns();
+
+    if (
+      String(board.boardId) !==
+      String(tokenPayload.boardId)
+    ) {
+      return res.status(400).json({
+        success: false,
+        error:
+          'The proposal link belongs to another board',
+      });
     }
 
     await updateProjectColumns(
@@ -87,53 +154,120 @@ export default async function handler(req, res) {
       tokenPayload.itemId,
       buildColumnValues(board.columns, {
         estimated_hours: estimatedHours,
-        deadline_date: { date: deadlineDate },
-        decision_status: { label: decisionStatus },
-        decision_date: { date: decisionDate },
-        project_status: { label: projectStatus },
+
+        deadline_date: {
+          date: deadlineDate,
+        },
+
+        decision_status: {
+          label: decisionStatus,
+        },
+
+        decision_date: {
+          date: decisionDate,
+        },
+
+        project_status: {
+          label: projectStatus,
+        },
       })
     );
 
     if (proposalPdf) {
       await addFileToColumn({
         itemId: tokenPayload.itemId,
-        columnId: board.columns.proposal_pdf.id,
+        columnId:
+          board.columns.proposal_pdf.id,
         filepath: proposalPdf.filepath,
-        filename: proposalPdf.originalFilename || 'proposal.pdf',
-        mimetype: proposalPdf.mimetype || 'application/pdf',
+        filename:
+          proposalPdf.originalFilename ||
+          'proposal.pdf',
+        mimetype:
+          proposalPdf.mimetype ||
+          'application/pdf',
       });
     }
 
     try {
-      await ensureBoardWebhook(board.boardId);
+      await ensureBoardWebhook(
+        board.boardId
+      );
     } catch (error) {
-      console.warn('Monday webhook registration skipped:', error.message);
+      console.warn(
+        'Monday webhook registration skipped:',
+        error.message
+      );
     }
 
-    const item = await getProjectItem(tokenPayload.itemId);
-    const notifyName = process.env.QUOTATION_RESPONSE_NOTIFY_USER_NAME?.trim() || 'Uma';
-    const notifyUser = process.env.QUOTATION_RESPONSE_NOTIFY_USER_ID?.trim()
-      ? { userId: process.env.QUOTATION_RESPONSE_NOTIFY_USER_ID.trim() }
-      : await findSlackUser(notifyName);
-    const notifyMention = getSlackMention(notifyUser?.userId) || notifyName;
-    const mondayLink = `https://monday.com/boards/${tokenPayload.boardId}/pulses/${tokenPayload.itemId}`;
+    const item =
+      await getProjectItem(
+        tokenPayload.itemId
+      );
 
-    // Keep proposal responses private. Slack receives only a short notification,
+    const notifyName =
+      process.env
+        .QUOTATION_RESPONSE_NOTIFY_USER_NAME
+        ?.trim() || 'Uma';
+
+    const notifyUser =
+      process.env
+        .QUOTATION_RESPONSE_NOTIFY_USER_ID
+        ?.trim()
+        ? {
+            userId:
+              process.env
+                .QUOTATION_RESPONSE_NOTIFY_USER_ID
+                .trim(),
+          }
+        : await findSlackUser(
+            notifyName
+          );
+
+    const notifyMention =
+      getSlackMention(
+        notifyUser?.userId
+      ) || notifyName;
+
+    // Use Monday's real item URL.
+    // Do not manually construct the monday.com URL.
+    const mondayLink =
+      item?.url ||
+      '';
+
+    const mondayLinkText =
+      mondayLink
+        ? `<${mondayLink}|Open Monday Item>`
+        : 'Monday item unavailable';
+
+    // Keep proposal responses private.
+    // Slack receives only a short notification,
     // not estimated hours, deadlines, decisions, or PDF details.
     await postToSlack(`✅ *Quotation Response Received*
 
 ${notifyMention}, a quotation response has been submitted for your request.
+
 *Project Name:* ${tokenPayload.projectName}
 *Project ID:* ${tokenPayload.itemId}
-*Monday Item:* ${mondayLink}`);
+*Monday Item:* ${mondayLinkText}`);
 
     return res.status(200).json({
       success: true,
-      projectId: String(item?.id || tokenPayload.itemId),
-      message: 'Proposal submitted successfully',
+      projectId: String(
+        item?.id ||
+        tokenPayload.itemId
+      ),
+      message:
+        'Proposal submitted successfully',
     });
   } catch (error) {
-    console.error('Submit proposal error:', error.message);
-    return res.status(500).json({ success: false, error: error.message });
+    console.error(
+      'Submit proposal error:',
+      error.message
+    );
+
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+    });
   }
 }
