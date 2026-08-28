@@ -268,6 +268,8 @@ export default function ProposalForm() {
                     Estimated Hours *
                   </label>
 
+                  
+
                   <input
                     id="estimatedHours"
                     name="estimatedHours"
@@ -284,6 +286,17 @@ export default function ProposalForm() {
                     required
                   />
 
+                  <label htmlFor="quotation">
+                    Quotation
+                  </label>
+                
+                  <textarea
+                    id="quotation"
+                    name="quotation"
+                    rows={5}
+                    placeholder="Enter quotation details..."
+                  />
+                      
                   <label
                     htmlFor="deadlineDate"
                     style={{
