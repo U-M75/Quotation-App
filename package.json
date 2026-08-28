@@ -15,6 +15,6 @@
   },
   "devDependencies": {
     "eslint": "^8.50.0",
-    "eslint-config-next": "^8.50.0"
+    "eslint-config-next": "^14.0.0"
   }
 }
