@@ -1,10 +1,8 @@
 import { createProposalToken } from '../../../lib/token';
 import { getSlackMention, postToSlack } from '../../../lib/slack';
 import {
-  buildColumnValues,
   createProjectItem,
   ensureBoardWebhook,
-  updateProjectColumns,
 } from '../../../lib/monday';
 
 function today() {
@@ -49,17 +47,6 @@ export default async function handler(req, res) {
       expiresAt: Date.now() + (30 * 24 * 60 * 60 * 1000),
     });
     const proposalLink = `${appBaseUrl.replace(/\/$/, '')}/proposal/${token}`;
-
-    const linkColumn = created.columns.response_form_link;
-    if (linkColumn) {
-      await updateProjectColumns(
-        created.boardId,
-        created.item.id,
-        buildColumnValues(created.columns, {
-          response_form_link: { url: proposalLink, text: 'Open proposal form' },
-        })
-      );
-    }
 
     try {
       await ensureBoardWebhook(created.boardId);
