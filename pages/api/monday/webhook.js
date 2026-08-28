@@ -10,7 +10,7 @@ export default async function handler(req, res) {
 
   const body = req.body || {};
 
-  // Monday webhook verification
+  // monday.com sends a challenge while registering a webhook.
   if (body.challenge) {
     return res.status(200).json({
       challenge: body.challenge,
@@ -18,7 +18,6 @@ export default async function handler(req, res) {
   }
 
   const event = body.event || {};
-
   const itemId = event.pulseId || event.itemId;
 
   if (!itemId) {
@@ -31,50 +30,29 @@ export default async function handler(req, res) {
   try {
     await queueMondayUpdate({
       itemId: String(itemId),
-
-      boardId: event.boardId
-        ? String(event.boardId)
-        : '',
-
+      boardId: event.boardId ? String(event.boardId) : '',
       columnId: event.columnId || '',
-
-      columnTitle:
-        event.columnTitle ||
-        event.columnId ||
-        'Monday.com',
-
-      // Save both values from the Monday webhook.
+      columnTitle: event.columnTitle || event.columnId || 'Monday.com',
       previousValue: event.previousValue ?? null,
       newValue: event.value ?? null,
-
-      // Monday's event timestamp.
-      changedAt:
-        event.changedAt ||
-        event.timestamp ||
-        new Date().toISOString(),
-
+      changedAt: event.changedAt || event.timestamp || new Date().toISOString(),
       receivedAt: new Date().toISOString(),
     });
 
-    // ✅ ALWAYS return 200 so Monday doesn't think automation failed
     return res.status(200).json({
       success: true,
       queued: true,
       message: 'Update queued successfully. Slack notification will be sent in 2 minutes.',
     });
   } catch (error) {
-    console.error(
-      'Monday webhook queue error:',
-      error.message
-    );
+    console.error('Monday webhook queue error:', error.message);
 
-    // Still return 200 to avoid Monday automation failures
-    // Log the error for monitoring
-    return res.status(200).json({
+    // Return an error when the queue cannot be written. A 200 here would make
+    // Monday report success while the update is silently lost.
+    return res.status(500).json({
       success: false,
       queued: false,
       error: error.message,
-      note: 'Error occurred but webhook returned 200 to prevent automation failure in Monday',
     });
   }
 }
