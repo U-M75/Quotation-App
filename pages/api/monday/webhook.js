@@ -10,7 +10,6 @@ export default async function handler(req, res) {
 
   const body = req.body || {};
 
-  // monday.com webhook verification
   if (body.challenge) {
     return res.status(200).json({
       challenge: body.challenge,
@@ -30,25 +29,44 @@ export default async function handler(req, res) {
   try {
     await queueMondayUpdate({
       itemId: String(itemId),
-      boardId: event.boardId ? String(event.boardId) : '',
+
+      boardId: event.boardId
+        ? String(event.boardId)
+        : '',
+
       columnId: event.columnId || '',
-      columnTitle: event.columnTitle || event.columnId || 'Monday.com',
-      previousValue: event.previousValue ?? null,
-      newValue: event.value ?? null,
-      changedAt: event.changedAt || event.timestamp || new Date().toISOString(),
+
+      columnTitle:
+        event.columnTitle ||
+        event.columnId ||
+        'Monday.com',
+
+      previousValue:
+        event.previousValue ?? null,
+
+      newValue:
+        event.value ?? null,
+
+      changedAt:
+        event.changedAt ||
+        event.timestamp ||
+        new Date().toISOString(),
+
       receivedAt: new Date().toISOString(),
     });
 
     return res.status(200).json({
       success: true,
       queued: true,
-      message: 'Update queued successfully. Slack notification will be sent in 2 minutes.',
+      message:
+        'Update queued successfully. Slack notification will be sent in 2 minutes.',
     });
   } catch (error) {
-    console.error('Monday webhook queue error:', error.message);
+    console.error(
+      'Monday webhook queue error:',
+      error.message
+    );
 
-    // Do not hide a queue failure. Returning 200 would make Monday report
-    // success even though the update could never reach Slack.
     return res.status(500).json({
       success: false,
       queued: false,
