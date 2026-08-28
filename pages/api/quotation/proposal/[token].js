@@ -247,12 +247,15 @@ export default async function handler(req, res) {
     // Keep proposal responses private.
     // Slack receives only a short notification,
     // not estimated hours, deadlines, decisions, or PDF details.
-    await postToSlack(`✅ *Quotation Response Received*
+await postToSlack(`✅ *Quotation Response Received*
 
 ${notifyMention}, a quotation response has been submitted for your request.
 
 *Project Name:* ${tokenPayload.projectName}
 *Project ID:* ${tokenPayload.itemId}
+
+*Quotation:* ${quotation || 'Not provided'}
+
 *Monday Item:* ${mondayLinkText}`);
 
     return res.status(200).json({
