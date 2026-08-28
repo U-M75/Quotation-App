@@ -180,7 +180,7 @@ export default async function handler(req, res) {
           pending.previousValue
         );
 
-        const newValue = getCurrentColumnValue(
+       const newValue = getCurrentColumnValue(
           item,
           pending
         );
@@ -247,7 +247,7 @@ export default async function handler(req, res) {
 
         await postToSlack(message);
 
-        await removeMondayUpdate(pending.itemId);
+        await removeMondayUpdate(pending.queueUpdateId);
 
         console.log(`✅ Successfully processed and notified for item ${pending.itemId}`);
 
