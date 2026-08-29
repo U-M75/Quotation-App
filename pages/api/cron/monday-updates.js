@@ -7,7 +7,11 @@ import { getProjectItem } from '../../../lib/monday';
 import { postToSlack } from '../../../lib/slack';
 
 function extractValue(value) {
-  if (value === null || value === undefined || value === '') {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ''
+  ) {
     return 'Empty';
   }
 
@@ -15,7 +19,10 @@ function extractValue(value) {
     return value;
   }
 
-  if (typeof value === 'number' || typeof value === 'boolean') {
+  if (
+    typeof value === 'number' ||
+    typeof value === 'boolean'
+  ) {
     return String(value);
   }
 
@@ -54,9 +61,12 @@ function extractValue(value) {
 
 function getItemColumn(item, pending) {
   return item?.column_values?.find(column => (
-    (pending.columnId && column.id === pending.columnId) ||
-    (pending.columnTitle &&
-      column.column?.title === pending.columnTitle)
+    (pending.columnId &&
+      column.id === pending.columnId) ||
+    (
+      pending.columnTitle &&
+      column.column?.title === pending.columnTitle
+    )
   ));
 }
 
@@ -76,7 +86,9 @@ function getCurrentColumnValue(item, pending) {
   }
 
   try {
-    return extractValue(JSON.parse(column.value || ''));
+    return extractValue(
+      JSON.parse(column.value || '')
+    );
   } catch {
     return 'Empty';
   }
@@ -84,7 +96,9 @@ function getCurrentColumnValue(item, pending) {
 
 function getProjectStatus(item) {
   const statusColumn = item?.column_values?.find(column => (
-    column.column?.title?.trim().toLowerCase() === 'project status'
+    column.column?.title
+      ?.trim()
+      .toLowerCase() === 'project status'
   ));
 
   return statusColumn?.text || '';
@@ -104,9 +118,17 @@ function formatDate(value) {
     const date = new Date(milliseconds);
 
     if (!Number.isNaN(date.getTime())) {
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      const year = String(date.getFullYear()).slice(-2);
+      const month = String(
+        date.getMonth() + 1
+      ).padStart(2, '0');
+
+      const day = String(
+        date.getDate()
+      ).padStart(2, '0');
+
+      const year = String(
+        date.getFullYear()
+      ).slice(-2);
 
       return `${month}/${day}/${year}`;
     }
@@ -115,7 +137,7 @@ function formatDate(value) {
   const dateString = String(value);
 
   const isoMatch = dateString.match(
-    /^(\d{4})-(\d{2})-(\d{2})/
+    /^(\\d{4})-(\\d{2})-(\\d{2})/
   );
 
   if (isoMatch) {
@@ -128,26 +150,39 @@ function formatDate(value) {
     return dateString;
   }
 
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  const year = String(date.getFullYear()).slice(-2);
+  const month = String(
+    date.getMonth() + 1
+  ).padStart(2, '0');
+
+  const day = String(
+    date.getDate()
+  ).padStart(2, '0');
+
+  const year = String(
+    date.getFullYear()
+  ).slice(-2);
 
   return `${month}/${day}/${year}`;
 }
 
 export default async function handler(req, res) {
-  if (req.method !== 'GET') {
+  if (
+    req.method !== 'GET' &&
+    req.method !== 'POST'
+  ) {
     return res.status(405).json({
       success: false,
       error: 'Method not allowed',
     });
   }
 
-  const cronSecret = process.env.CRON_SECRET?.trim();
+  const cronSecret =
+    process.env.CRON_SECRET?.trim();
 
   if (
     cronSecret &&
-    req.headers.authorization !== `Bearer ${cronSecret}`
+    req.headers.authorization !==
+      `Bearer ${cronSecret}`
   ) {
     return res.status(401).json({
       success: false,
@@ -156,38 +191,53 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { due } = await getDueMondayUpdates();
+    const {
+      due,
+      staleQueueUpdateIds,
+    } = await getDueMondayUpdates();
 
-    console.log(`📊 Cron job started. Found ${due.length} due updates`);
+    // Remove older duplicate queue comments.
+    for (
+      const queueUpdateId of staleQueueUpdateIds
+    ) {
+      try {
+        await removeMondayUpdate(
+          queueUpdateId
+        );
+      } catch (error) {
+        console.error(
+          `Could not remove duplicate queue update ${queueUpdateId}:`,
+          error.message
+        );
+      }
+    }
 
     let processed = 0;
 
     for (const pending of due) {
       try {
-        console.log(`⏳ Processing update for item ${pending.itemId}`);
-        const item = await getProjectItem(pending.itemId);
+        const item = await getProjectItem(
+          pending.itemId
+        );
 
         if (!item) {
-          console.warn(`⚠️ Item ${pending.itemId} not found, removing from queue`);
-          await removeMondayUpdate(pending.itemId);
+          await removeMondayUpdate(
+            pending.queueUpdateId
+          );
 
           continue;
         }
 
-        // Fetch the current value from Monday after the delay.
-        // This prevents blank or stale webhook values.
         const oldValue = extractValue(
           pending.previousValue
         );
 
-       const newValue = getCurrentColumnValue(
-          item,
-          pending
-        );
+        // Read the latest current value from Monday.
+        const newValue =
+          getCurrentColumnValue(item, pending);
 
-        const projectStatus = getProjectStatus(
-          item
-        ).toLowerCase();
+        const projectStatus =
+          getProjectStatus(item).toLowerCase();
 
         const isStatusChange =
           pending.columnTitle
@@ -247,9 +297,11 @@ export default async function handler(req, res) {
 
         await postToSlack(message);
 
-        await removeMondayUpdate(pending.queueUpdateId);
-
-        console.log(`✅ Successfully processed and notified for item ${pending.itemId}`);
+        // Delete the temporary queue update,
+        // not the project item.
+        await removeMondayUpdate(
+          pending.queueUpdateId
+        );
 
         processed += 1;
       } catch (error) {
@@ -258,7 +310,7 @@ export default async function handler(req, res) {
           error.message
         );
 
-        // Keep the update in memory so the next run can retry it.
+        // Keep failed updates for the next cron run.
       }
     }
 
@@ -270,7 +322,7 @@ export default async function handler(req, res) {
     });
   } catch (error) {
     console.error(
-      '❌ Monday cron error:',
+      'Monday cron error:',
       error.message
     );
 
