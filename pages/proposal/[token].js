@@ -1,520 +1,301 @@
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/router';
-import Head from 'next/head';
+import { IncomingForm } from 'formidable';
 
-const colors = {
-  brown: '#8b5e3b',
-  brownSoft: '#906645',
-  pink: '#ff7380',
-  pinkSoft: '#fbdce6',
-  pinkPale: '#fff6f6',
-  blue: '#c7eaf9',
-  blueDeep: '#2f5363',
-  white: '#ffffff',
-  border: '#f2a5a3',
+import { verifyProposalToken } from '../../../../lib/token';
+
+import {
+  findSlackUser,
+  getSlackMention,
+  postToSlack,
+} from '../../../../lib/slack';
+
+import {
+  addFileToColumn,
+  buildColumnValues,
+  ensureBoardAndColumns,
+  getProjectItem,
+  updateProjectColumns,
+} from '../../../../lib/monday';
+
+export const config = {
+  api: {
+    bodyParser: false,
+  },
 };
 
-export default function ProposalForm() {
-  const router = useRouter();
-  const { token } = router.query;
+function parseMultipartForm(req) {
+  return new Promise((resolve, reject) => {
+    const form = new IncomingForm({
+      multiples: false,
+      keepExtensions: true,
+      maxFileSize: 10 * 1024 * 1024,
+    });
 
-  const [project, setProject] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState(false);
-  const [pdf, setPdf] = useState(null);
-
-  const [form, setForm] = useState({
-    estimatedHours: '',
-    deadlineDate: '',
-    decisionStatus: 'Pending',
-    decisionDate: '',
-    projectStatus: 'Not Started',
-  });
-
-  useEffect(() => {
-    if (!token || typeof token !== 'string') return;
-
-    fetch(`/api/quotation/proposal/${encodeURIComponent(token)}`)
-      .then(async response => {
-        const data = await response.json();
-
-        if (!response.ok || !data.success) {
-          throw new Error(data.error || 'Unable to load proposal');
-        }
-
-        setProject(data.project);
-      })
-      .catch(loadError => {
-        setError(loadError.message);
-      })
-      .finally(() => {
-        setLoading(false);
-      });
-  }, [token]);
-
-  const updateForm = event => {
-    const { name, value } = event.target;
-
-    setForm(previous => ({
-      ...previous,
-      [name]: value,
-    }));
-  };
-
-  const submitProposal = async event => {
-    event.preventDefault();
-
-    if (!token) return;
-
-    setSubmitting(true);
-    setError('');
-
-    try {
-      const data = new FormData();
-
-      Object.entries(form).forEach(([key, value]) => {
-        data.append(key, value);
-      });
-
-      if (pdf) {
-        data.append('proposalPdf', pdf);
+    form.parse(req, (error, fields, files) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve({ fields, files });
       }
+    });
+  });
+}
 
-      const response = await fetch(
-        `/api/quotation/proposal/${encodeURIComponent(token)}`,
-        {
-          method: 'POST',
-          body: data,
-        }
+function firstValue(value) {
+  return Array.isArray(value)
+    ? value[0] || ''
+    : value || '';
+}
+
+function getProposalPdf(value) {
+  if (!value) {
+    return null;
+  }
+
+  return Array.isArray(value)
+    ? value[0]
+    : value;
+}
+
+export default async function handler(req, res) {
+  const tokenPayload =
+    verifyProposalToken(req.query.token);
+
+  if (!tokenPayload) {
+    return res.status(401).json({
+      success: false,
+      error:
+        'This proposal link is invalid or expired',
+    });
+  }
+
+  if (req.method === 'GET') {
+    return res.status(200).json({
+      success: true,
+      project: {
+        id: tokenPayload.itemId,
+        name: tokenPayload.projectName,
+        assignedTo: tokenPayload.assignedToName,
+      },
+    });
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({
+      success: false,
+      error: 'Method not allowed',
+    });
+  }
+
+  try {
+    const { fields, files } =
+      await parseMultipartForm(req);
+
+    const quotation =
+      firstValue(
+        fields.quotation
+      ).trim();
+
+    const estimatedHours =
+      firstValue(
+        fields.estimatedHours
+      ).trim();
+
+    const deadlineDate =
+      firstValue(
+        fields.deadlineDate
+      ).trim();
+
+    const decisionStatus =
+      firstValue(
+        fields.decisionStatus
+      ).trim();
+
+    const decisionDate =
+      firstValue(
+        fields.decisionDate
+      ).trim();
+
+    const projectStatus =
+      firstValue(
+        fields.projectStatus
+      ).trim();
+
+    const proposalPdf =
+      getProposalPdf(
+        files.proposalPdf
       );
 
-      const result = await response.json();
-
-      if (!response.ok || !result.success) {
-        throw new Error(result.error || 'Unable to submit proposal');
-      }
-
-      setSuccess(true);
-    } catch (submitError) {
-      setError(submitError.message);
-    } finally {
-      setSubmitting(false);
+    if (
+      !quotation ||
+      !estimatedHours ||
+      !deadlineDate ||
+      !decisionStatus ||
+      !decisionDate ||
+      !projectStatus
+    ) {
+      return res.status(400).json({
+        success: false,
+        error:
+          'Quotation, estimated hours, deadline, decision, decision date, and project status are required',
+      });
     }
-  };
 
-  const fieldStyle = {
-    width: '100%',
-    padding: '12px 14px',
-    background: colors.pinkPale,
-    border: `1px solid ${colors.border}`,
-    borderRadius: '10px',
-    color: colors.brown,
-    fontSize: '15px',
-    fontWeight: '500',
-  };
+    const board =
+      await ensureBoardAndColumns();
 
-  return (
-    <>
-      <Head>
-        <title>KSC Proposal Form</title>
-      </Head>
+    if (
+      String(board.boardId) !==
+      String(tokenPayload.boardId)
+    ) {
+      return res.status(400).json({
+        success: false,
+        error:
+          'The proposal link belongs to another board',
+      });
+    }
 
-      <main
-        style={{
-          minHeight: '100vh',
-          background: 'linear-gradient(135deg, #fbdce6 0%, #c7eaf9 100%)',
-          color: colors.brown,
-          padding: '26px 16px 48px',
-        }}
-      >
-        <div style={{ maxWidth: '760px', margin: '0 auto' }}>
-          <header style={{ textAlign: 'center', marginBottom: '24px' }}>
-            <img
-              className="ksc-logo"
-              src="/logo.png"
-              alt="Kawaii Slime Company"
-              style={{
-                display: 'block',
-                width: '140px',
-                height: '140px',
-                objectFit: 'contain',
-                margin: '0 auto 8px',
-              }}
-            />
+    /*
+     * IMPORTANT:
+     * Quotation is intentionally NOT included here.
+     *
+     * All other proposal fields are saved to Monday.
+     * Quotation is sent ONLY to Slack.
+     */
+    await updateProjectColumns(
+      board.boardId,
+      tokenPayload.itemId,
+      buildColumnValues(board.columns, {
+        estimated_hours: estimatedHours,
 
-            <h1
-              className="ksc-title"
-              style={{
-                margin: 0,
-                color: colors.brown,
-                fontSize: '32px',
-              }}
-            >
-              KSC Proposal Form
-            </h1>
+        deadline_date: {
+          date: deadlineDate,
+        },
 
-            <p
-              style={{
-                margin: '6px 0 0',
-                color: colors.brownSoft,
-                fontWeight: '600',
-              }}
-            >
-              Project estimate and proposal details ✨
-            </p>
-          </header>
+        decision_status: {
+          label: decisionStatus,
+        },
 
-          {loading && (
-            <section
-              style={{
-                background: colors.white,
-                borderRadius: '14px',
-                padding: '30px',
-                textAlign: 'center',
-              }}
-            >
-              Loading project details...
-            </section>
-          )}
+        decision_date: {
+          date: decisionDate,
+        },
 
-          {!loading && error && !project && (
-            <section
-              style={{
-                background: colors.white,
-                borderRadius: '14px',
-                padding: '30px',
-                textAlign: 'center',
-                color: colors.pink,
-              }}
-            >
-              {error}
-            </section>
-          )}
+        project_status: {
+          label: projectStatus,
+        },
+      })
+    );
 
-          {!loading && project && !success && (
-            <>
-              <section
-                style={{
-                  background: colors.white,
-                  border: `1px solid ${colors.border}`,
-                  borderRadius: '14px',
-                  padding: '20px',
-                  marginBottom: '18px',
-                  boxShadow: '0 10px 30px rgba(139, 94, 59, 0.10)',
-                }}
-              >
-                <h2
-                  style={{
-                    margin: '0 0 12px',
-                    color: colors.brown,
-                    fontSize: '20px',
-                  }}
-                >
-                  Project Details
-                </h2>
+    /*
+     * Keep PDF upload exactly as before.
+     *
+     * PDF is still saved to the Monday File column.
+     */
+    if (proposalPdf) {
+      await addFileToColumn({
+        itemId: tokenPayload.itemId,
 
-                <div
-                  style={{
-                    display: 'grid',
-                    gap: '7px',
-                    color: colors.brownSoft,
-                  }}
-                >
-                  <div>
-                    <strong>Project Name:</strong> {project.name}
-                  </div>
+        columnId:
+          board.columns.proposal_pdf.id,
 
-                  <div>
-                    <strong>Project ID:</strong> {project.id}
-                  </div>
+        filepath:
+          proposalPdf.filepath,
 
-                  <div>
-                    <strong>Assigned To:</strong> {project.assignedTo}
-                  </div>
-                </div>
-              </section>
+        filename:
+          proposalPdf.originalFilename ||
+          'proposal.pdf',
 
-              <section
-                className="ksc-card"
-                style={{
-                  background: colors.white,
-                  border: `1px solid ${colors.border}`,
-                  borderRadius: '14px',
-                  padding: '26px',
-                  boxShadow: '0 10px 30px rgba(139, 94, 59, 0.12)',
-                }}
-              >
-                <h2
-                  style={{
-                    margin: '0 0 20px',
-                    color: colors.brown,
-                    fontSize: '22px',
-                  }}
-                >
-                  Proposal Details
-                </h2>
+        mimetype:
+          proposalPdf.mimetype ||
+          'application/pdf',
+      });
+    }
 
-                <form onSubmit={submitProposal}>
-                  <label
-                    htmlFor="estimatedHours"
-                    style={{
-                      display: 'block',
-                      marginBottom: '7px',
-                      fontWeight: '700',
-                    }}
-                  >
-                    Estimated Hours *
-                  </label>
+    /*
+     * DO NOT register a Monday webhook here.
+     *
+     * Monday → Slack notifications are now handled
+     * completely by Monday.com Workflow.
+     */
 
-                  
+    const item =
+      await getProjectItem(
+        tokenPayload.itemId
+      );
 
-                  <input
-                    id="estimatedHours"
-                    name="estimatedHours"
-                    type="number"
-                    min="0"
-                    step="0.5"
-                    value={form.estimatedHours}
-                    onChange={updateForm}
-                    placeholder="e.g. 24"
-                    style={{
-                      ...fieldStyle,
-                      marginBottom: '18px',
-                    }}
-                    required
-                  />
+    const notifyName =
+      process.env
+        .QUOTATION_RESPONSE_NOTIFY_USER_NAME
+        ?.trim() || 'Uma';
 
-                  <label htmlFor="quotation">
-                    Quotation
-                  </label>
-                
-                  <textarea
-                    id="quotation"
-                    name="quotation"
-                    rows={5}
-                    placeholder="Enter quotation details..."
-                  />
-                      
-                  <label
-                    htmlFor="deadlineDate"
-                    style={{
-                      display: 'block',
-                      marginBottom: '7px',
-                      fontWeight: '700',
-                    }}
-                  >
-                    Deadline Date *
-                  </label>
+    const notifyUser =
+      process.env
+        .QUOTATION_RESPONSE_NOTIFY_USER_ID
+        ?.trim()
+        ? {
+            userId:
+              process.env
+                .QUOTATION_RESPONSE_NOTIFY_USER_ID
+                .trim(),
+          }
+        : await findSlackUser(
+            notifyName
+          );
 
-                  <input
-                    id="deadlineDate"
-                    name="deadlineDate"
-                    type="date"
-                    value={form.deadlineDate}
-                    onChange={updateForm}
-                    style={{
-                      ...fieldStyle,
-                      marginBottom: '18px',
-                    }}
-                    required
-                  />
+    const notifyMention =
+      getSlackMention(
+        notifyUser?.userId
+      ) || notifyName;
 
-                  <label
-                    htmlFor="proposalPdf"
-                    style={{
-                      display: 'block',
-                      marginBottom: '7px',
-                      fontWeight: '700',
-                    }}
-                  >
-                    Proposal PDF
-                  </label>
+    /*
+     * Use Monday's real item URL.
+     */
+    const mondayLink =
+      item?.url || '';
 
-                  <input
-                    id="proposalPdf"
-                    type="file"
-                    accept="application/pdf,.pdf"
-                    onChange={event =>
-                      setPdf(event.target.files?.[0] || null)
-                    }
-                    style={{
-                      ...fieldStyle,
-                      marginBottom: '18px',
-                    }}
-                  />
+    const mondayLinkText =
+      mondayLink
+        ? `<${mondayLink}|Open Monday Item>`
+        : 'Monday item unavailable';
 
-                  {pdf && (
-                    <p
-                      style={{
-                        margin: '-8px 0 18px',
-                        fontSize: '13px',
-                        color: colors.blueDeep,
-                      }}
-                    >
-                      Selected: {pdf.name}
-                    </p>
-                  )}
+    /*
+     * QUOTATION IS SENT ONLY TO SLACK.
+     *
+     * It is NOT written to Monday.
+     */
+    await postToSlack(
+      `✅ *Quotation Response Received*
 
-                  <label
-                    htmlFor="decisionStatus"
-                    style={{
-                      display: 'block',
-                      marginBottom: '7px',
-                      fontWeight: '700',
-                    }}
-                  >
-                    Decision Status *
-                  </label>
+${notifyMention}, a quotation response has been submitted for your request.
 
-                  <select
-                    id="decisionStatus"
-                    name="decisionStatus"
-                    value={form.decisionStatus}
-                    onChange={updateForm}
-                    style={{
-                      ...fieldStyle,
-                      marginBottom: '18px',
-                      appearance: 'auto',
-                    }}
-                    required
-                  >
-                    <option>Pending</option>
-                    <option>Approved</option>
-                    <option>Rejected</option>
-                  </select>
+*Project Name:* ${tokenPayload.projectName}
+*Project ID:* ${tokenPayload.itemId}
 
-                  <label
-                    htmlFor="decisionDate"
-                    style={{
-                      display: 'block',
-                      marginBottom: '7px',
-                      fontWeight: '700',
-                    }}
-                  >
-                    Decision Date *
-                  </label>
+*Quotation:*
+${quotation}
 
-                  <input
-                    id="decisionDate"
-                    name="decisionDate"
-                    type="date"
-                    value={form.decisionDate}
-                    onChange={updateForm}
-                    style={{
-                      ...fieldStyle,
-                      marginBottom: '18px',
-                    }}
-                    required
-                  />
+*Monday Item:* ${mondayLinkText}`
+    );
 
-                  <label
-                    htmlFor="projectStatus"
-                    style={{
-                      display: 'block',
-                      marginBottom: '7px',
-                      fontWeight: '700',
-                    }}
-                  >
-                    Project Status *
-                  </label>
+    return res.status(200).json({
+      success: true,
 
-                  <select
-                    id="projectStatus"
-                    name="projectStatus"
-                    value={form.projectStatus}
-                    onChange={updateForm}
-                    style={{
-                      ...fieldStyle,
-                      marginBottom: '22px',
-                      appearance: 'auto',
-                    }}
-                    required
-                  >
-                    <option>Not Started</option>
-                    <option>In Progress</option>
-                    <option>Completed</option>
-                    <option>On Hold</option>
-                  </select>
+      projectId: String(
+        item?.id ||
+        tokenPayload.itemId
+      ),
 
-                  {error && (
-                    <div
-                      style={{
-                        background: colors.pinkSoft,
-                        color: colors.pink,
-                        borderRadius: '10px',
-                        padding: '12px 14px',
-                        marginBottom: '18px',
-                        fontWeight: '700',
-                      }}
-                    >
-                      {error}
-                    </div>
-                  )}
+      message:
+        'Proposal submitted successfully',
+    });
+  } catch (error) {
+    console.error(
+      'Submit proposal error:',
+      error.message
+    );
 
-                  <button
-                    type="submit"
-                    disabled={submitting}
-                    style={{
-                      width: '100%',
-                      padding: '13px 20px',
-                      border: 0,
-                      borderRadius: '10px',
-                      background: submitting
-                        ? '#c2c2c2'
-                        : colors.pink,
-                      color: colors.white,
-                      cursor: submitting
-                        ? 'not-allowed'
-                        : 'pointer',
-                      fontSize: '16px',
-                      fontWeight: '700',
-                    }}
-                  >
-                    {submitting
-                      ? 'Submitting Proposal...'
-                      : 'Submit Proposal ✅'}
-                  </button>
-                </form>
-              </section>
-            </>
-          )}
-
-          {success && (
-            <section
-              style={{
-                background: colors.white,
-                border: `1px solid ${colors.border}`,
-                borderRadius: '14px',
-                padding: '42px 24px',
-                textAlign: 'center',
-                boxShadow: '0 10px 30px rgba(139, 94, 59, 0.12)',
-              }}
-            >
-              <div style={{ fontSize: '52px' }}>🎉</div>
-
-              <h2
-                style={{
-                  margin: '10px 0 12px',
-                  color: colors.brown,
-                }}
-              >
-                Proposal Submitted!
-              </h2>
-
-              <p
-                style={{
-                  margin: 0,
-                  color: colors.brownSoft,
-                }}
-              >
-                The proposal details and PDF have been saved to Monday.com.
-              </p>
-            </section>
-          )}
-        </div>
-      </main>
-    </>
-  );
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
 }
