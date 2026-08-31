@@ -7,14 +7,18 @@ import {
 
 import {
   createProjectItem,
-  ensureBoardWebhook,
 } from '../../../lib/monday';
 
 function today() {
-  return new Date().toISOString().slice(0, 10);
+  return new Date()
+    .toISOString()
+    .slice(0, 10);
 }
 
-export default async function handler(req, res) {
+export default async function handler(
+  req,
+  res
+) {
   if (req.method !== 'POST') {
     return res.status(405).json({
       success: false,
@@ -36,54 +40,88 @@ export default async function handler(req, res) {
   ) {
     return res.status(400).json({
       success: false,
-      error: 'Project name, assignee, and project description are required',
+      error:
+        'Project name, assignee, and project description are required',
     });
   }
 
-  const appBaseUrl = process.env.APP_BASE_URL?.trim();
+  const appBaseUrl =
+    process.env.APP_BASE_URL?.trim();
 
   if (!appBaseUrl) {
     return res.status(500).json({
       success: false,
-      error: 'APP_BASE_URL is not configured in Vercel',
+      error:
+        'APP_BASE_URL is not configured in Vercel',
     });
   }
 
   try {
-    const created = await createProjectItem({
-      projectName: projectName.trim(),
-      assignedTo: assignedToName || assignedToId,
-      description: description.trim(),
-      proposalDate: today(),
-    });
+    const created =
+      await createProjectItem({
+        projectName:
+          projectName.trim(),
 
-    const token = createProposalToken({
-      boardId: created.boardId,
-      itemId: String(created.item.id),
-      projectName: projectName.trim(),
-      assignedToId,
-      assignedToName: assignedToName || assignedToId,
-      expiresAt: Date.now() + (30 * 24 * 60 * 60 * 1000),
-    });
+        assignedTo:
+          assignedToName ||
+          assignedToId,
+
+        description:
+          description.trim(),
+
+        proposalDate: today(),
+      });
+
+    const token =
+      createProposalToken({
+        boardId:
+          created.boardId,
+
+        itemId:
+          String(
+            created.item.id
+          ),
+
+        projectName:
+          projectName.trim(),
+
+        assignedToId,
+
+        assignedToName:
+          assignedToName ||
+          assignedToId,
+
+        expiresAt:
+          Date.now() +
+          30 *
+            24 *
+            60 *
+            60 *
+            1000,
+      });
 
     const proposalLink =
-      `${appBaseUrl.replace(/\/$/, '')}/proposal/${token}`;
+      `${appBaseUrl.replace(
+        /\/$/,
+        ''
+      )}/proposal/${token}`;
 
-    try {
-      await ensureBoardWebhook(created.boardId);
-    } catch (error) {
-      console.warn(
-        'Monday webhook registration skipped:',
-        error.message
-      );
-    }
+    /*
+     * Monday webhook registration has been removed.
+     *
+     * Monday → Slack notifications are now
+     * handled by Monday.com Workflow.
+     */
 
     const mention =
-      getSlackMention(assignedToId) ||
+      getSlackMention(
+        assignedToId
+      ) ||
       assignedToName ||
       'the assigned team member';
 
-    const slackMessage = `📝 *New Quotation Request*
+    const slackMessage =
+      `📝 *New Quotation Request*
 
 *Project:* ${projectName.trim()}
 *Project ID:* ${created.item.id}
@@ -95,13 +133,22 @@ export default async function handler(req, res) {
 ${mention}, please complete the proposal form here:
 ${proposalLink}`;
 
-    await postToSlack(slackMessage);
+    await postToSlack(
+      slackMessage
+    );
 
     return res.status(200).json({
       success: true,
-      projectId: String(created.item.id),
+
+      projectId:
+        String(
+          created.item.id
+        ),
+
       proposalLink,
-      message: 'Quotation request created successfully',
+
+      message:
+        'Quotation request created successfully',
     });
   } catch (error) {
     console.error(
