@@ -51,11 +51,13 @@ export default async function handler(req, res) {
       projectName: projectName.trim(),
       assignedToId,
       assignedToName: assignedToName || assignedToId,
+      description: description.trim(),
       expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
     });
 
     const proposalLink = `${appBaseUrl.replace(/\/$/, '')}/proposal/${token}`;
     const mention = getSlackMention(assignedToId) || assignedToName || 'the assigned team member';
+    const proposalLinkText = `<${proposalLink}|Proposal Request Form>`;
 
     await postToSlack(`📝 *New Quotation Request*
 
@@ -66,8 +68,8 @@ export default async function handler(req, res) {
 *Proposal Request:* Requested
 *Proposal Date Requested:* ${today()}
 
-${mention}, please complete the proposal form here:
-${proposalLink}`);
+${mention}, please complete the form here:
+${proposalLinkText}`);
 
     return res.status(200).json({
       success: true,
