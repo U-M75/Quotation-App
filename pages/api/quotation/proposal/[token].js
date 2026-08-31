@@ -1,6 +1,11 @@
 import { IncomingForm } from 'formidable';
 import { verifyProposalToken } from '../../../../lib/token';
-import { findSlackUser, getSlackMention, postToSlack } from '../../../../lib/slack';
+import {
+  findSlackUser,
+  getSlackMention,
+  postToSlack,
+} from '../../../../lib/slack';
+
 import {
   addFileToColumn,
   buildColumnValues,
@@ -26,43 +31,65 @@ function parseMultipartForm(req) {
     });
 
     form.parse(req, (error, fields, files) => {
-      if (error) reject(error);
-      else resolve({ fields, files });
+      if (error) {
+        reject(error);
+      } else {
+        resolve({ fields, files });
+      }
     });
   });
 }
 
 function firstValue(value) {
-  return Array.isArray(value) ? value[0] || '' : value || '';
+  return Array.isArray(value)
+    ? value[0] || ''
+    : value || '';
 }
 
 function getProposalPdf(value) {
-  if (!value) return null;
-  return Array.isArray(value) ? value[0] : value;
+  if (!value) {
+    return null;
+  }
+
+  return Array.isArray(value)
+    ? value[0]
+    : value;
 }
 
 export default async function handler(req, res) {
-  const tokenPayload = verifyProposalToken(req.query.token);
+  const tokenPayload =
+    verifyProposalToken(req.query.token);
 
   if (!tokenPayload) {
     return res.status(401).json({
       success: false,
-      error: 'This proposal link is invalid or expired',
+      error:
+        'This proposal link is invalid or expired',
     });
   }
 
   try {
-    if (await hasProposalBeenSubmitted(tokenPayload.itemId)) {
+    if (
+      await hasProposalBeenSubmitted(
+        tokenPayload.itemId
+      )
+    ) {
       return res.status(410).json({
         success: false,
-        error: 'This proposal link has already been used',
+        error:
+          'This proposal link has already been used',
       });
     }
   } catch (error) {
-    console.error('Proposal link check failed:', error.message);
+    console.error(
+      'Proposal link check failed:',
+      error.message
+    );
+
     return res.status(500).json({
       success: false,
-      error: 'Unable to verify this proposal link',
+      error:
+        'Unable to verify this proposal link',
     });
   }
 
@@ -72,8 +99,10 @@ export default async function handler(req, res) {
       project: {
         id: tokenPayload.itemId,
         name: tokenPayload.projectName,
-        description: tokenPayload.description || '',
-        assignedTo: tokenPayload.assignedToName,
+        description:
+          tokenPayload.description || '',
+        assignedTo:
+          tokenPayload.assignedToName,
       },
     });
   }
@@ -86,82 +115,179 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { fields, files } = await parseMultipartForm(req);
-    const estimatedHours = firstValue(fields.estimatedHours).trim();
-    const quotation = firstValue(fields.quotation).trim();
-    const deadlineDate = firstValue(fields.deadlineDate).trim();
-    const proposalPdf = getProposalPdf(files.proposalPdf);
+    const {
+      fields,
+      files,
+    } = await parseMultipartForm(req);
 
-    if (!estimatedHours || !deadlineDate) {
+    const estimatedHours =
+      firstValue(
+        fields.estimatedHours
+      ).trim();
+
+    const quotation =
+      firstValue(
+        fields.quotation
+      ).trim();
+
+    const deadlineDate =
+      firstValue(
+        fields.deadlineDate
+      ).trim();
+
+    const proposalPdf =
+      getProposalPdf(
+        files.proposalPdf
+      );
+
+    if (
+      !estimatedHours ||
+      !deadlineDate
+    ) {
       return res.status(400).json({
         success: false,
-        error: 'Estimated hours and deadline date are required',
+        error:
+          'Estimated hours and deadline date are required',
       });
     }
 
-    const board = await ensureBoardAndColumns();
+    const board =
+      await ensureBoardAndColumns();
 
-    if (String(board.boardId) !== String(tokenPayload.boardId)) {
+    if (
+      String(board.boardId) !==
+      String(tokenPayload.boardId)
+    ) {
       return res.status(400).json({
         success: false,
-        error: 'The proposal link belongs to another board',
+        error:
+          'The proposal link belongs to another board',
       });
     }
 
-    // Save proposal details to Monday except the Quotation field.
+    // Save only estimated hours and deadline to Monday.
+    // Quotation is intentionally not saved to Monday.
     await updateProjectColumns(
       board.boardId,
       tokenPayload.itemId,
-      buildColumnValues(board.columns, {
-        estimated_hours: estimatedHours,
-        deadline_date: { date: deadlineDate },
-      })
+      buildColumnValues(
+        board.columns,
+        {
+          estimated_hours:
+            estimatedHours,
+
+          deadline_date: {
+            date: deadlineDate,
+          },
+        }
+      )
     );
 
     // Keep the complete PDF in the Monday file column.
     if (proposalPdf) {
       await addFileToColumn({
-        itemId: tokenPayload.itemId,
-        columnId: board.columns.proposal_pdf.id,
-        filepath: proposalPdf.filepath,
-        filename: proposalPdf.originalFilename || 'proposal.pdf',
-        mimetype: proposalPdf.mimetype || 'application/pdf',
+        itemId:
+          tokenPayload.itemId,
+
+        columnId:
+          board.columns.proposal_pdf.id,
+
+        filepath:
+          proposalPdf.filepath,
+
+        filename:
+          proposalPdf.originalFilename ||
+          'proposal.pdf',
+
+        mimetype:
+          proposalPdf.mimetype ||
+          'application/pdf',
       });
     }
 
-    const item = await getProjectItem(tokenPayload.itemId);
-    const notifyName = process.env.QUOTATION_RESPONSE_NOTIFY_USER_NAME?.trim() || 'Uma';
-    const notifyUser = process.env.QUOTATION_RESPONSE_NOTIFY_USER_ID?.trim()
-      ? { userId: process.env.QUOTATION_RESPONSE_NOTIFY_USER_ID.trim() }
-      : await findSlackUser(notifyName);
-    const notifyMention = getSlackMention(notifyUser?.userId) || notifyName;
-    const mondayLink = item?.url || '';
-    const mondayLinkText = mondayLink
-      ? `<${mondayLink}|Open Monday Item>`
-      : 'Monday item unavailable';
+    const item =
+      await getProjectItem(
+        tokenPayload.itemId
+      );
 
-    // Only the quotation value is sent to Slack, not the other proposal details.
-    await postToSlack(`✅ *Quotation Response Received*
+    const notifyName =
+      process.env
+        .QUOTATION_RESPONSE_NOTIFY_USER_NAME
+        ?.trim() || 'Uma';
+
+    const notifyUser =
+      process.env
+        .QUOTATION_RESPONSE_NOTIFY_USER_ID
+        ?.trim()
+        ? {
+            userId:
+              process.env
+                .QUOTATION_RESPONSE_NOTIFY_USER_ID
+                .trim(),
+          }
+        : await findSlackUser(
+            notifyName
+          );
+
+    const notifyMention =
+      getSlackMention(
+        notifyUser?.userId
+      ) || notifyName;
+
+    const mondayLink =
+      item?.url || '';
+
+    const mondayLinkText =
+      mondayLink
+        ? `<${mondayLink}|Open Monday Item>`
+        : 'Monday item unavailable';
+
+    // Professional message design matching New Project Request.
+    // Only quotation data is sent to Slack.
+    const slackMessage = `:bell: *Quotation Response Received*
+:pinkline::pinkline::pinkline::pinkline::pinkline:
 
 ${notifyMention}, a quotation response has been submitted for your request.
 
-*Project Name:* ${tokenPayload.projectName}
+:clipboard: *Quotation Details*
+
+*Project:* ${tokenPayload.projectName}
 *Project ID:* ${tokenPayload.itemId}
 
-*Quotation:* ${quotation || 'Not provided'}
+*Quotation:*
+${quotation || 'Not provided'}
 
-*Monday Item:* ${mondayLinkText}`);
+:pinkline::pinkline::pinkline::pinkline::pinkline:
 
-    // Permanently invalidate this link after a successful submission.
-    await markProposalSubmitted(tokenPayload.itemId);
+:link: *Monday Item*
+
+${mondayLinkText}
+
+:pinkline::pinkline::pinkline::pinkline::pinkline:`;
+
+    await postToSlack(
+      slackMessage
+    );
+
+    // Permanently invalidate the link after submission.
+    await markProposalSubmitted(
+      tokenPayload.itemId
+    );
 
     return res.status(200).json({
       success: true,
-      projectId: String(item?.id || tokenPayload.itemId),
-      message: 'Proposal submitted successfully',
+      projectId: String(
+        item?.id ||
+        tokenPayload.itemId
+      ),
+      message:
+        'Proposal submitted successfully',
     });
   } catch (error) {
-    console.error('Submit proposal error:', error.message);
+    console.error(
+      'Submit proposal error:',
+      error.message
+    );
 
     return res.status(500).json({
       success: false,
