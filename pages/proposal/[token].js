@@ -17,9 +17,6 @@ const initialForm = {
   estimatedHours: '',
   quotation: '',
   deadlineDate: '',
-  decisionStatus: 'Pending',
-  decisionDate: '',
-  projectStatus: 'Not Started',
 };
 
 export default function ProposalForm() {
@@ -120,6 +117,7 @@ export default function ProposalForm() {
                   <div><strong>Project Name:</strong> {project.name}</div>
                   <div><strong>Project ID:</strong> {project.id}</div>
                   <div><strong>Assigned To:</strong> {project.assignedTo}</div>
+                  <div><strong>Project Description:</strong> {project.description || 'Not provided'}</div>
                 </div>
               </section>
 
@@ -139,24 +137,6 @@ export default function ProposalForm() {
                   <label htmlFor="proposalPdf" style={{ display: 'block', marginBottom: '7px', fontWeight: '700' }}>Proposal PDF</label>
                   <input id="proposalPdf" type="file" accept="application/pdf,.pdf" onChange={event => setPdf(event.target.files?.[0] || null)} style={{ ...fieldStyle, marginBottom: '18px' }} />
                   {pdf && <p style={{ margin: '-8px 0 18px', fontSize: '13px', color: colors.brownSoft }}>Selected: {pdf.name}</p>}
-
-                  <label htmlFor="decisionStatus" style={{ display: 'block', marginBottom: '7px', fontWeight: '700' }}>Decision Status *</label>
-                  <select id="decisionStatus" name="decisionStatus" value={form.decisionStatus} onChange={updateForm} style={{ ...fieldStyle, marginBottom: '18px', appearance: 'auto' }} required>
-                    <option>Pending</option>
-                    <option>Approved</option>
-                    <option>Rejected</option>
-                  </select>
-
-                  <label htmlFor="decisionDate" style={{ display: 'block', marginBottom: '7px', fontWeight: '700' }}>Decision Date *</label>
-                  <input id="decisionDate" name="decisionDate" type="date" value={form.decisionDate} onChange={updateForm} style={{ ...fieldStyle, marginBottom: '18px' }} required />
-
-                  <label htmlFor="projectStatus" style={{ display: 'block', marginBottom: '7px', fontWeight: '700' }}>Project Status *</label>
-                  <select id="projectStatus" name="projectStatus" value={form.projectStatus} onChange={updateForm} style={{ ...fieldStyle, marginBottom: '22px', appearance: 'auto' }} required>
-                    <option>Not Started</option>
-                    <option>In Progress</option>
-                    <option>Completed</option>
-                    <option>On Hold</option>
-                  </select>
 
                   {error && <div style={{ background: colors.pinkSoft, color: colors.pink, borderRadius: '10px', padding: '12px 14px', marginBottom: '18px', fontWeight: '700' }}>{error}</div>}
 
