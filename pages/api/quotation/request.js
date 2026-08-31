@@ -1,13 +1,9 @@
 import { createProposalToken } from '../../../lib/token';
-
 import {
   getSlackMention,
   postToSlack,
 } from '../../../lib/slack';
-
-import {
-  createProjectItem,
-} from '../../../lib/monday';
+import { createProjectItem } from '../../../lib/monday';
 
 function today() {
   return new Date()
@@ -15,10 +11,7 @@ function today() {
     .slice(0, 10);
 }
 
-export default async function handler(
-  req,
-  res
-) {
+export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({
       success: false,
@@ -58,30 +51,25 @@ export default async function handler(
 
   try {
     /*
-     * Create the project on Monday.
+     * Create project in Monday.com
      */
-    const created =
-      await createProjectItem({
-        projectName:
-          projectName.trim(),
+    const created = await createProjectItem({
+      projectName:
+        projectName.trim(),
 
-        assignedTo:
-          assignedToName ||
-          assignedToId,
+      assignedTo:
+        assignedToName ||
+        assignedToId,
 
-        description:
-          description.trim(),
+      description:
+        description.trim(),
 
-        proposalDate:
-          today(),
-      });
+      proposalDate:
+        today(),
+    });
 
     /*
-     * Create a secure proposal link.
-     *
-     * The description is included in the signed
-     * token so the contractor can see it on the
-     * Proposal Request Form.
+     * Create secure one-time proposal link
      */
     const token =
       createProposalToken({
@@ -121,29 +109,31 @@ export default async function handler(
       )}/proposal/${token}`;
 
     /*
-     * This keeps the long URL hidden in Slack.
-     *
-     * Slack will display only:
-     *
-     * Proposal Request Form
+     * Slack mention
      */
-    const proposalLinkText =
-      `<${proposalLink}|Proposal Request Form>`;
-
     const mention =
       getSlackMention(
         assignedToId
       ) ||
       assignedToName ||
-      'the assigned contractor';
+      'Assigned team member';
 
     /*
-     * Slack notification.
-     *
-     * Project description is included here as well.
+     * Short clickable Slack link
      */
-    await postToSlack(
-      `📝 *New Project Request*
+    const proposalLinkText =
+      `<${proposalLink}|Proposal Request Form>`;
+
+    /*
+     * Professional Slack message
+     *
+     * :pinkline: is a custom Slack emoji.
+     * Repeating it creates the long pink divider.
+     */
+    const slackMessage = `:bell: *New Project Request*
+:pinkline::pinkline::pinkline::pinkline::pinkline:
+
+:clipboard: *Project Details*
 
 *Project:* ${projectName.trim()}
 *Project ID:* ${created.item.id}
@@ -152,11 +142,18 @@ export default async function handler(
 *Project Description:*
 ${description.trim()}
 
-*Proposal Request:* Requested
-*Date Requested:* ${today()}
+:pinkline::pinkline::pinkline::pinkline::pinkline:
 
-${mention}, please complete the proposal form here:
-${proposalLinkText}`
+:link: *Proposal Request*
+
+${mention}, please complete the proposal using the form below:
+
+${proposalLinkText}
+
+:pinkline::pinkline::pinkline::pinkline::pinkline:`;
+
+    await postToSlack(
+      slackMessage
     );
 
     return res.status(200).json({
@@ -180,7 +177,8 @@ ${proposalLinkText}`
 
     return res.status(500).json({
       success: false,
-      error: error.message,
+      error:
+        error.message,
     });
   }
 }
