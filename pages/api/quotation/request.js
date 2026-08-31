@@ -1,24 +1,12 @@
 import { createProposalToken } from '../../../lib/token';
-
-import {
-  getSlackMention,
-  postToSlack,
-} from '../../../lib/slack';
-
-import {
-  createProjectItem,
-} from '../../../lib/monday';
+import { getSlackMention, postToSlack } from '../../../lib/slack';
+import { createProjectItem } from '../../../lib/monday';
 
 function today() {
-  return new Date()
-    .toISOString()
-    .slice(0, 10);
+  return new Date().toISOString().slice(0, 10);
 }
 
-export default async function handler(
-  req,
-  res
-) {
+export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({
       success: false,
@@ -33,95 +21,43 @@ export default async function handler(
     description,
   } = req.body || {};
 
-  if (
-    !projectName?.trim() ||
-    !assignedToId ||
-    !description?.trim()
-  ) {
+  if (!projectName?.trim() || !assignedToId || !description?.trim()) {
     return res.status(400).json({
       success: false,
-      error:
-        'Project name, assignee, and project description are required',
+      error: 'Project name, assignee, and project description are required',
     });
   }
 
-  const appBaseUrl =
-    process.env.APP_BASE_URL?.trim();
+  const appBaseUrl = process.env.APP_BASE_URL?.trim();
 
   if (!appBaseUrl) {
     return res.status(500).json({
       success: false,
-      error:
-        'APP_BASE_URL is not configured in Vercel',
+      error: 'APP_BASE_URL is not configured in Vercel',
     });
   }
 
   try {
-    const created =
-      await createProjectItem({
-        projectName:
-          projectName.trim(),
+    const created = await createProjectItem({
+      projectName: projectName.trim(),
+      assignedTo: assignedToName || assignedToId,
+      description: description.trim(),
+      proposalDate: today(),
+    });
 
-        assignedTo:
-          assignedToName ||
-          assignedToId,
+    const token = createProposalToken({
+      boardId: created.boardId,
+      itemId: String(created.item.id),
+      projectName: projectName.trim(),
+      assignedToId,
+      assignedToName: assignedToName || assignedToId,
+      expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
+    });
 
-        description:
-          description.trim(),
+    const proposalLink = `${appBaseUrl.replace(/\/$/, '')}/proposal/${token}`;
+    const mention = getSlackMention(assignedToId) || assignedToName || 'the assigned team member';
 
-        proposalDate: today(),
-      });
-
-    const token =
-      createProposalToken({
-        boardId:
-          created.boardId,
-
-        itemId:
-          String(
-            created.item.id
-          ),
-
-        projectName:
-          projectName.trim(),
-
-        assignedToId,
-
-        assignedToName:
-          assignedToName ||
-          assignedToId,
-
-        expiresAt:
-          Date.now() +
-          30 *
-            24 *
-            60 *
-            60 *
-            1000,
-      });
-
-    const proposalLink =
-      `${appBaseUrl.replace(
-        /\/$/,
-        ''
-      )}/proposal/${token}`;
-
-    /*
-     * Monday webhook registration has been removed.
-     *
-     * Monday → Slack notifications are now
-     * handled by Monday.com Workflow.
-     */
-
-    const mention =
-      getSlackMention(
-        assignedToId
-      ) ||
-      assignedToName ||
-      'the assigned team member';
-
-    const slackMessage =
-      `📝 *New Quotation Request*
+    await postToSlack(`📝 *New Quotation Request*
 
 *Project:* ${projectName.trim()}
 *Project ID:* ${created.item.id}
@@ -131,30 +67,16 @@ export default async function handler(
 *Proposal Date Requested:* ${today()}
 
 ${mention}, please complete the proposal form here:
-${proposalLink}`;
-
-    await postToSlack(
-      slackMessage
-    );
+${proposalLink}`);
 
     return res.status(200).json({
       success: true,
-
-      projectId:
-        String(
-          created.item.id
-        ),
-
+      projectId: String(created.item.id),
       proposalLink,
-
-      message:
-        'Quotation request created successfully',
+      message: 'Quotation request created successfully',
     });
   } catch (error) {
-    console.error(
-      'Create quotation request error:',
-      error.message
-    );
+    console.error('Create quotation request error:', error.message);
 
     return res.status(500).json({
       success: false,
