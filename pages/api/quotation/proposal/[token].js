@@ -12,7 +12,6 @@ import {
   addFileToColumn,
   buildColumnValues,
   ensureBoardAndColumns,
-  ensureBoardWebhook,
   getProjectItem,
   updateProjectColumns,
 } from '../../../../lib/monday';
@@ -91,6 +90,11 @@ export default async function handler(req, res) {
     const { fields, files } =
       await parseMultipartForm(req);
 
+    const quotation =
+      firstValue(
+        fields.quotation
+      ).trim();
+
     const estimatedHours =
       firstValue(
         fields.estimatedHours
@@ -116,17 +120,13 @@ export default async function handler(req, res) {
         fields.projectStatus
       ).trim();
 
-    const quotation =
-      firstValue(
-        fields.quotation
-      ).trim();
-        
     const proposalPdf =
       getProposalPdf(
         files.proposalPdf
       );
 
     if (
+      !quotation ||
       !estimatedHours ||
       !deadlineDate ||
       !decisionStatus ||
@@ -136,7 +136,7 @@ export default async function handler(req, res) {
       return res.status(400).json({
         success: false,
         error:
-          'Estimated hours, deadline, decision, decision date, and project status are required',
+          'Quotation, estimated hours, deadline, decision, decision date, and project status are required',
       });
     }
 
@@ -154,6 +154,13 @@ export default async function handler(req, res) {
       });
     }
 
+    /*
+     * IMPORTANT:
+     * Quotation is intentionally NOT included here.
+     *
+     * All other proposal fields are saved to Monday.
+     * Quotation is sent ONLY to Slack.
+     */
     await updateProjectColumns(
       board.boardId,
       tokenPayload.itemId,
@@ -178,31 +185,37 @@ export default async function handler(req, res) {
       })
     );
 
+    /*
+     * Keep PDF upload exactly as before.
+     *
+     * PDF is still saved to the Monday File column.
+     */
     if (proposalPdf) {
       await addFileToColumn({
         itemId: tokenPayload.itemId,
+
         columnId:
           board.columns.proposal_pdf.id,
-        filepath: proposalPdf.filepath,
+
+        filepath:
+          proposalPdf.filepath,
+
         filename:
           proposalPdf.originalFilename ||
           'proposal.pdf',
+
         mimetype:
           proposalPdf.mimetype ||
           'application/pdf',
       });
     }
 
-    try {
-      await ensureBoardWebhook(
-        board.boardId
-      );
-    } catch (error) {
-      console.warn(
-        'Monday webhook registration skipped:',
-        error.message
-      );
-    }
+    /*
+     * DO NOT register a Monday webhook here.
+     *
+     * Monday → Slack notifications are now handled
+     * completely by Monday.com Workflow.
+     */
 
     const item =
       await getProjectItem(
@@ -233,37 +246,44 @@ export default async function handler(req, res) {
         notifyUser?.userId
       ) || notifyName;
 
-    // Use Monday's real item URL.
-    // Do not manually construct the monday.com URL.
+    /*
+     * Use Monday's real item URL.
+     */
     const mondayLink =
-      item?.url ||
-      '';
+      item?.url || '';
 
     const mondayLinkText =
       mondayLink
         ? `<${mondayLink}|Open Monday Item>`
         : 'Monday item unavailable';
 
-    // Keep proposal responses private.
-    // Slack receives only a short notification,
-    // not estimated hours, deadlines, decisions, or PDF details.
-await postToSlack(`✅ *Quotation Response Received*
+    /*
+     * QUOTATION IS SENT ONLY TO SLACK.
+     *
+     * It is NOT written to Monday.
+     */
+    await postToSlack(
+      `✅ *Quotation Response Received*
 
 ${notifyMention}, a quotation response has been submitted for your request.
 
 *Project Name:* ${tokenPayload.projectName}
 *Project ID:* ${tokenPayload.itemId}
 
-*Quotation:* ${quotation || 'Not provided'}
+*Quotation:*
+${quotation}
 
-*Monday Item:* ${mondayLinkText}`);
+*Monday Item:* ${mondayLinkText}`
+    );
 
     return res.status(200).json({
       success: true,
+
       projectId: String(
         item?.id ||
         tokenPayload.itemId
       ),
+
       message:
         'Proposal submitted successfully',
     });
