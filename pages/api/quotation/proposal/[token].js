@@ -6,6 +6,8 @@ import {
   buildColumnValues,
   ensureBoardAndColumns,
   getProjectItem,
+  hasProposalBeenSubmitted,
+  markProposalSubmitted,
   updateProjectColumns,
 } from '../../../../lib/monday';
 
@@ -49,12 +51,28 @@ export default async function handler(req, res) {
     });
   }
 
+  try {
+    if (await hasProposalBeenSubmitted(tokenPayload.itemId)) {
+      return res.status(410).json({
+        success: false,
+        error: 'This proposal link has already been used',
+      });
+    }
+  } catch (error) {
+    console.error('Proposal link check failed:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Unable to verify this proposal link',
+    });
+  }
+
   if (req.method === 'GET') {
     return res.status(200).json({
       success: true,
       project: {
         id: tokenPayload.itemId,
         name: tokenPayload.projectName,
+        description: tokenPayload.description || '',
         assignedTo: tokenPayload.assignedToName,
       },
     });
@@ -72,15 +90,12 @@ export default async function handler(req, res) {
     const estimatedHours = firstValue(fields.estimatedHours).trim();
     const quotation = firstValue(fields.quotation).trim();
     const deadlineDate = firstValue(fields.deadlineDate).trim();
-    const decisionStatus = firstValue(fields.decisionStatus).trim();
-    const decisionDate = firstValue(fields.decisionDate).trim();
-    const projectStatus = firstValue(fields.projectStatus).trim();
     const proposalPdf = getProposalPdf(files.proposalPdf);
 
-    if (!estimatedHours || !deadlineDate || !decisionStatus || !decisionDate || !projectStatus) {
+    if (!estimatedHours || !deadlineDate) {
       return res.status(400).json({
         success: false,
-        error: 'Estimated hours, deadline, decision, decision date, and project status are required',
+        error: 'Estimated hours and deadline date are required',
       });
     }
 
@@ -100,9 +115,6 @@ export default async function handler(req, res) {
       buildColumnValues(board.columns, {
         estimated_hours: estimatedHours,
         deadline_date: { date: deadlineDate },
-        decision_status: { label: decisionStatus },
-        decision_date: { date: decisionDate },
-        project_status: { label: projectStatus },
       })
     );
 
@@ -139,6 +151,9 @@ ${notifyMention}, a quotation response has been submitted for your request.
 *Quotation:* ${quotation || 'Not provided'}
 
 *Monday Item:* ${mondayLinkText}`);
+
+    // Permanently invalidate this link after a successful submission.
+    await markProposalSubmitted(tokenPayload.itemId);
 
     return res.status(200).json({
       success: true,
