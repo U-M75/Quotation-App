@@ -609,33 +609,26 @@ export default function ProposalForm() {
                       Deadline (Days) *
                     </label>
 
-                    <select
+                    <input
                       id="deadlineDays"
                       name="deadlineDays"
+                      type="number"
+                      min="1"
+                      step="1"
                       value={
                         form.deadlineDays
                       }
                       onChange={
                         updateForm
                       }
+                      placeholder="Enter number of days"
                       style={{
                         ...fieldStyle,
                         marginBottom:
                           '18px',
-                        appearance:
-                          'auto',
                       }}
                       required
-                    >
-                      <option value="">
-                        Select deadline
-                      </option>
-                      {Array.from({ length: 30 }, (_, index) => index + 1).map(days => (
-                        <option key={days} value={days}>
-                          {days} {days === 1 ? 'day' : 'days'}
-                        </option>
-                      ))}
-                    </select>
+                    />
 
                     <label
                       htmlFor="proposalPdf"
