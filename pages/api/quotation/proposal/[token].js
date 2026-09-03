@@ -154,14 +154,13 @@ export default async function handler(req, res) {
 
     if (
       !estimatedHours ||
-      !Number.isInteger(requestedDays) ||
-      requestedDays < 1 ||
-      requestedDays > 365
+      !Number.isSafeInteger(requestedDays) ||
+      requestedDays < 1
     ) {
       return res.status(400).json({
         success: false,
         error:
-          'Estimated hours and a deadline between 1 and 365 days are required',
+          'Estimated hours and a valid deadline in days are required',
       });
     }
 
