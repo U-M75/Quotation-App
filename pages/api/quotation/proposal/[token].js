@@ -1,5 +1,6 @@
 import { IncomingForm } from 'formidable';
 import { verifyProposalToken } from '../../../../lib/token';
+
 import {
   findSlackUser,
   getSlackMention,
@@ -125,14 +126,24 @@ export default async function handler(req, res) {
         fields.estimatedHours
       ).trim();
 
-    const quotation =
+    const investment =
       firstValue(
-        fields.quotation
+        fields.investment
       ).trim();
 
-    const deadlineDate =
+    const deliverables =
       firstValue(
-        fields.deadlineDate
+        fields.deliverables
+      ).trim();
+
+    const deliverableOutcome =
+      firstValue(
+        fields.deliverableOutcome
+      ).trim();
+
+    const deadlineDays =
+      firstValue(
+        fields.deadlineDays
       ).trim();
 
     const proposalPdf =
@@ -140,16 +151,30 @@ export default async function handler(req, res) {
         files.proposalPdf
       );
 
+    const requestedDays =
+      Number(deadlineDays);
+
     if (
       !estimatedHours ||
-      !deadlineDate
+      !Number.isInteger(requestedDays) ||
+      requestedDays < 1 ||
+      requestedDays > 365
     ) {
       return res.status(400).json({
         success: false,
         error:
-          'Estimated hours and deadline date are required',
+          'Estimated hours and a deadline between 1 and 365 days are required',
       });
     }
+
+    const deadline = new Date();
+
+    deadline.setDate(
+      deadline.getDate() + requestedDays
+    );
+
+    const deadlineDate =
+      deadline.toISOString().slice(0, 10);
 
     const board =
       await ensureBoardAndColumns();
@@ -165,8 +190,9 @@ export default async function handler(req, res) {
       });
     }
 
-    // Save only estimated hours and deadline to Monday.
-    // Quotation is intentionally not saved to Monday.
+    // Save estimated hours and calculated deadline to Monday.
+    // Investment, Deliverables, and Deliverable Outcome
+    // are sent to Slack only.
     await updateProjectColumns(
       board.boardId,
       tokenPayload.itemId,
@@ -183,7 +209,7 @@ export default async function handler(req, res) {
       )
     );
 
-    // Keep the complete PDF in the Monday file column.
+    // Keep the complete PDF in Monday.
     if (proposalPdf) {
       await addFileToColumn({
         itemId:
@@ -242,20 +268,27 @@ export default async function handler(req, res) {
         ? `<${mondayLink}|Open Monday Item>`
         : 'Monday item unavailable';
 
-    // Professional message design matching New Project Request.
-    // Only quotation data is sent to Slack.
     const slackMessage = `:bell: *Quotation Response Received*
 :pinkline::pinkline::pinkline::pinkline::pinkline:
 
 ${notifyMention}, a quotation response has been submitted for your request.
 
-:clipboard: *Quotation Details*
+:clipboard: *Proposal Details*
 
 *Project:* ${tokenPayload.projectName}
 *Project ID:* ${tokenPayload.itemId}
 
-*Quotation:*
-${quotation || 'Not provided'}
+*Investment:*
+${investment || 'Not provided'}
+
+*Deliverables:*
+${deliverables || 'Not provided'}
+
+*Deliverable Outcome:*
+${deliverableOutcome || 'Not provided'}
+
+*Deadline:*
+${requestedDays} ${requestedDays === 1 ? 'day' : 'days'}
 
 :pinkline::pinkline::pinkline::pinkline::pinkline:
 
@@ -269,7 +302,7 @@ ${mondayLinkText}
       slackMessage
     );
 
-    // Permanently invalidate the link after submission.
+    // Prevent the proposal link from being used again.
     await markProposalSubmitted(
       tokenPayload.itemId
     );
