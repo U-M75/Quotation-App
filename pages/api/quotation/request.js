@@ -139,7 +139,7 @@ export default async function handler(req, res) {
 *Project ID:* ${created.item.id}
 *Assigned To:* ${mention}
 
-*Project Description:*
+*Project Objective:*
 ${description.trim()}
 
 :pinkline::pinkline::pinkline::pinkline::pinkline:
