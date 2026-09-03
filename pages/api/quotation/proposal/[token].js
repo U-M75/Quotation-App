@@ -1,498 +1,334 @@
-import fs from 'node:fs/promises';
+import { IncomingForm } from 'formidable';
 
-export const BOARD_NAME = 'KSC Quotation Requests';
+import { verifyProposalToken } from '../../../../lib/token';
 
-export const COLUMN_SPECS = [
-  { id: 'assigned_to', title: 'Assigned To', type: 'text' },
-  { id: 'project_description', title: 'Project Description', type: 'long_text' },
-  {
-    id: 'proposal_request',
-    title: 'Proposal Request Status',
-    type: 'status',
-    labels: ['Requested', 'In Review', 'Submitted'],
+import {
+  findSlackUser,
+  getSlackMention,
+  postToSlack,
+} from '../../../../lib/slack';
+
+import {
+  addFileToColumn,
+  buildColumnValues,
+  ensureBoardAndColumns,
+  getProjectItem,
+  hasProposalBeenSubmitted,
+  markProposalSubmitted,
+  updateProjectColumns,
+} from '../../../../lib/monday';
+
+export const config = {
+  api: {
+    bodyParser: false,
   },
-  {
-    id: 'proposal_date_requested',
-    title: 'Proposal Date Requested',
-    type: 'date',
-  },
-  { id: 'estimated_hours', title: 'Estimated Hours', type: 'numbers' },
-  { id: 'investment', title: 'Investment', type: 'long_text' },
-  { id: 'deliverables', title: 'Deliverables', type: 'long_text' },
-  { id: 'deliverable_outcome', title: 'Deliverable Outcome', type: 'long_text' },
-  { id: 'deadline_days', title: 'Deadline (Days)', type: 'text' },
-  { id: 'proposal_pdf', title: 'Proposal PDF', type: 'file' },
-  {
-    id: 'decision_status',
-    title: 'Decision Status',
-    type: 'status',
-    labels: ['Pending', 'Approved', 'Rejected'],
-  },
-  { id: 'decision_date', title: 'Decision Date', type: 'date' },
-  {
-    id: 'project_status',
-    title: 'Project Status',
-    type: 'status',
-    labels: ['Not Started', 'In Progress', 'Completed', 'On Hold'],
-  },
-];
+};
 
-function getToken() {
-  const token = process.env.MONDAY_API_TOKEN?.trim();
+function parseMultipartForm(req) {
+  return new Promise((resolve, reject) => {
+    const form = new IncomingForm({
+      multiples: false,
+      keepExtensions: true,
+      maxFileSize: 10 * 1024 * 1024,
+    });
 
-  if (!token) {
-    throw new Error('MONDAY_API_TOKEN is not configured');
-  }
-
-  return token;
-}
-
-export async function mondayRequest(query, variables = {}) {
-  const response = await fetch('https://api.monday.com/v2', {
-    method: 'POST',
-    headers: {
-      Authorization: getToken(),
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ query, variables }),
+    form.parse(req, (error, fields, files) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve({ fields, files });
+      }
+    });
   });
+}
 
-  const payload = await response.json();
+function firstValue(value) {
+  return Array.isArray(value)
+    ? value[0] || ''
+    : value || '';
+}
 
-  if (!response.ok || payload.errors?.length) {
-    const message =
-      payload.errors?.map(error => error.message).join('; ') ||
-      response.statusText;
-
-    throw new Error(`Monday API error: ${message}`);
+function getProposalPdf(value) {
+  if (!value) {
+    return null;
   }
 
-  return payload.data;
+  return Array.isArray(value)
+    ? value[0]
+    : value;
 }
 
-function normaliseTitle(title) {
-  return String(title || '').trim().toLowerCase();
-}
+export default async function handler(req, res) {
+  const tokenPayload =
+    verifyProposalToken(req.query.token);
 
-function statusDefaults(spec) {
-  if (spec.id === 'proposal_request') {
-    return `defaults: { labels: [
-      { color: bright_blue, label: "Requested", index: 0 },
-      { color: working_orange, label: "In Review", index: 1 },
-      { color: done_green, label: "Submitted", index: 2, is_done: true }
-    ] }`;
+  if (!tokenPayload) {
+    return res.status(401).json({
+      success: false,
+      error:
+        'This proposal link is invalid or expired',
+    });
   }
 
-  if (spec.id === 'decision_status') {
-    return `defaults: { labels: [
-      { color: bright_blue, label: "Pending", index: 0 },
-      { color: done_green, label: "Approved", index: 1, is_done: true },
-      { color: stuck_red, label: "Rejected", index: 2 }
-    ] }`;
-  }
-
-  return `defaults: { labels: [
-    { color: bright_blue, label: "Not Started", index: 0 },
-    { color: working_orange, label: "In Progress", index: 1 },
-    { color: done_green, label: "Completed", index: 2, is_done: true },
-    { color: stuck_red, label: "On Hold", index: 3 }
-  ] }`;
-}
-
-async function createColumn(boardId, spec) {
-  const boardNumber = Number(boardId);
-
-  const boardArgument = Number.isFinite(boardNumber)
-    ? String(boardNumber)
-    : JSON.stringify(String(boardId));
-
-  const mutation =
-    spec.type === 'status'
-      ? `mutation {
-          create_status_column(
-            board_id: ${boardArgument}
-            id: ${JSON.stringify(spec.id)}
-            title: ${JSON.stringify(spec.title)}
-            ${statusDefaults(spec)}
-          ) {
-            id
-            title
-            type
-          }
-        }`
-      : `mutation {
-          create_column(
-            board_id: ${boardArgument}
-            id: ${JSON.stringify(spec.id)}
-            title: ${JSON.stringify(spec.title)}
-            column_type: ${spec.type}
-          ) {
-            id
-            title
-            type
-          }
-        }`;
-
-  const data = await mondayRequest(mutation);
-
-  return spec.type === 'status'
-    ? data.create_status_column
-    : data.create_column;
-}
-
-async function readBoard(boardId) {
-  const data = await mondayRequest(
-    `query ($boardId: [ID!]) {
-      boards(ids: $boardId) {
-        id
-        name
-        columns {
-          id
-          title
-          type
-        }
-      }
-    }`,
-    {
-      boardId: [String(boardId)],
-    }
-  );
-
-  if (!data.boards?.[0]) {
-    throw new Error(`Monday board ${boardId} was not found`);
-  }
-
-  return data.boards[0];
-}
-
-async function findBoardByName() {
-  const data = await mondayRequest(
-    `query {
-      boards(limit: 100) {
-        id
-        name
-        columns {
-          id
-          title
-          type
-        }
-      }
-    }`
-  );
-
-  return (
-    data.boards?.find(
-      board =>
-        normaliseTitle(board.name) === normaliseTitle(BOARD_NAME)
-    ) || null
-  );
-}
-
-async function createBoard() {
-  const workspaceId = process.env.MONDAY_WORKSPACE_ID?.trim();
-
-  if (!workspaceId) {
-    throw new Error(
-      'MONDAY_WORKSPACE_ID is not configured; it is required to create the board'
-    );
-  }
-
-  const data = await mondayRequest(
-    `mutation ($name: String!, $workspaceId: ID!) {
-      create_board(
-        board_name: $name,
-        board_kind: public,
-        workspace_id: $workspaceId
-      ) {
-        id
-        name
-      }
-    }`,
-    {
-      name: BOARD_NAME,
-      workspaceId: String(workspaceId),
-    }
-  );
-
-  return readBoard(data.create_board.id);
-}
-
-export async function ensureBoardAndColumns() {
-  const configuredBoardId =
-    process.env.MONDAY_BOARD_ID?.trim();
-
-  let board = configuredBoardId
-    ? await readBoard(configuredBoardId)
-    : await findBoardByName();
-
-  if (!board) {
-    board = await createBoard();
-  }
-
-  const columns = {};
-
-  const existingByTitle = new Map(
-    (board.columns || []).map(column => [
-      normaliseTitle(column.title),
-      column,
-    ])
-  );
-
-  for (const spec of COLUMN_SPECS) {
-    const existing = existingByTitle.get(
-      normaliseTitle(spec.title)
-    );
-
-    const column =
-      existing || (await createColumn(board.id, spec));
-
-    columns[spec.id] = column;
-  }
-
-  return {
-    boardId: String(board.id),
-    columns,
-  };
-}
-
-export function buildColumnValues(columns, values) {
-  const result = {};
-
-  for (const [key, value] of Object.entries(values)) {
+  try {
     if (
-      value === undefined ||
-      value === null ||
-      !columns[key]
+      await hasProposalBeenSubmitted(
+        tokenPayload.itemId
+      )
     ) {
-      continue;
+      return res.status(410).json({
+        success: false,
+        error:
+          'This proposal link has already been used',
+      });
     }
-
-    result[columns[key].id] = value;
-  }
-
-  return result;
-}
-
-export async function createProjectItem({
-  projectName,
-  assignedTo,
-  description,
-  proposalDate,
-}) {
-  const board = await ensureBoardAndColumns();
-
-  const columnValues = buildColumnValues(board.columns, {
-    assigned_to: assignedTo,
-    project_description: {
-      text: description,
-    },
-    proposal_request: {
-      label: 'Requested',
-    },
-    proposal_date_requested: {
-      date: proposalDate,
-    },
-    decision_status: {
-      label: 'Pending',
-    },
-    project_status: {
-      label: 'Not Started',
-    },
-  });
-
-  const itemData = await mondayRequest(
-    `mutation (
-      $boardId: ID!,
-      $itemName: String!,
-      $columnValues: JSON!
-    ) {
-      create_item(
-        board_id: $boardId
-        item_name: $itemName
-        column_values: $columnValues
-      ) {
-        id
-        name
-        url
-      }
-    }`,
-    {
-      boardId: board.boardId,
-      itemName: projectName,
-      columnValues: JSON.stringify(columnValues),
-    }
-  );
-
-  const item = itemData.create_item;
-
-  return {
-    ...board,
-    item,
-  };
-}
-
-export async function updateProjectColumns(
-  boardId,
-  itemId,
-  columnValues
-) {
-  const data = await mondayRequest(
-    `mutation (
-      $boardId: ID!,
-      $itemId: ID!,
-      $columnValues: JSON!
-    ) {
-      change_multiple_column_values(
-        board_id: $boardId
-        item_id: $itemId
-        column_values: $columnValues
-      ) {
-        id
-      }
-    }`,
-    {
-      boardId: String(boardId),
-      itemId: String(itemId),
-      columnValues:
-        typeof columnValues === 'string'
-          ? columnValues
-          : JSON.stringify(columnValues),
-    }
-  );
-
-  return data.change_multiple_column_values;
-}
-
-export async function getProjectItem(itemId) {
-  const data = await mondayRequest(
-    `query ($itemIds: [ID!]) {
-      items(ids: $itemIds) {
-        id
-        name
-        url
-        board {
-          id
-          name
-        }
-        column_values {
-          id
-          text
-          value
-          column {
-            title
-            type
-          }
-        }
-      }
-    }`,
-    {
-      itemIds: [String(itemId)],
-    }
-  );
-
-  return data.items?.[0] || null;
-}
-
-export async function addFileToColumn({
-  itemId,
-  columnId,
-  filepath,
-  filename,
-  mimetype,
-}) {
-  const bytes = await fs.readFile(filepath);
-
-  const query = `mutation ($file: File!) {
-    add_file_to_column(
-      item_id: ${String(itemId)},
-      column_id: ${JSON.stringify(columnId)},
-      file: $file
-    ) {
-      id
-    }
-  }`;
-
-  const form = new FormData();
-
-  form.append('query', query);
-
-  form.append(
-    'map',
-    JSON.stringify({
-      image: 'variables.file',
-    })
-  );
-
-  form.append(
-    'image',
-    new Blob(
-      [bytes],
-      {
-        type: mimetype || 'application/pdf',
-      }
-    ),
-    filename || 'proposal.pdf'
-  );
-
-  const response = await fetch(
-    'https://api.monday.com/v2/file',
-    {
-      method: 'POST',
-      headers: {
-        Authorization: getToken(),
-      },
-      body: form,
-    }
-  );
-
-  const payload = await response.json();
-
-  if (!response.ok || payload.errors?.length) {
-    const message =
-      payload.errors?.map(error => error.message).join('; ') ||
-      response.statusText;
-
-    throw new Error(
-      `Monday file upload error: ${message}`
+  } catch (error) {
+    console.error(
+      'Proposal link check failed:',
+      error.message
     );
+
+    return res.status(500).json({
+      success: false,
+      error:
+        'Unable to verify this proposal link',
+    });
   }
 
-  return payload.data?.add_file_to_column;
-}
+  if (req.method === 'GET') {
+    return res.status(200).json({
+      success: true,
+      project: {
+        id: tokenPayload.itemId,
+        name: tokenPayload.projectName,
+        description:
+          tokenPayload.description || '',
+        assignedTo:
+          tokenPayload.assignedToName,
+      },
+    });
+  }
 
-const PROPOSAL_USED_MARKER = '[KSC_PROPOSAL_SUBMITTED]';
+  if (req.method !== 'POST') {
+    return res.status(405).json({
+      success: false,
+      error: 'Method not allowed',
+    });
+  }
 
-export async function hasProposalBeenSubmitted(itemId) {
-  const data = await mondayRequest(
-    `query ($itemIds: [ID!]) {
-      items(ids: $itemIds) {
-        updates(limit: 100) {
-          body
+  try {
+    const {
+      fields,
+      files,
+    } = await parseMultipartForm(req);
+
+    const estimatedHours =
+      firstValue(
+        fields.estimatedHours
+      ).trim();
+
+    const investment =
+      firstValue(
+        fields.investment
+      ).trim();
+
+    const deliverables =
+      firstValue(
+        fields.deliverables
+      ).trim();
+
+    const deliverableOutcome =
+      firstValue(
+        fields.deliverableOutcome
+      ).trim();
+
+    const deadlineDays =
+      firstValue(
+        fields.deadlineDays
+      ).trim();
+
+    const proposalPdf =
+      getProposalPdf(
+        files.proposalPdf
+      );
+
+    const requestedDays =
+      Number(deadlineDays);
+
+    if (
+      !estimatedHours ||
+      !Number.isSafeInteger(requestedDays) ||
+      requestedDays < 1
+    ) {
+      return res.status(400).json({
+        success: false,
+        error:
+          'Estimated hours and a valid deadline in days are required',
+      });
+    }
+
+    const deadlineLabel =
+      `${requestedDays} ${
+        requestedDays === 1
+          ? 'day'
+          : 'days'
+      }`;
+
+    const board =
+      await ensureBoardAndColumns();
+
+    if (
+      String(board.boardId) !==
+      String(tokenPayload.boardId)
+    ) {
+      return res.status(400).json({
+        success: false,
+        error:
+          'The proposal link belongs to another board',
+      });
+    }
+
+    // Save all proposal fields to Monday.
+    await updateProjectColumns(
+      board.boardId,
+      tokenPayload.itemId,
+      buildColumnValues(
+        board.columns,
+        {
+          estimated_hours:
+            estimatedHours,
+
+          investment:
+            investment,
+
+          deliverables:
+            deliverables,
+
+          deliverable_outcome:
+            deliverableOutcome,
+
+          deadline_days:
+            deadlineLabel,
         }
-      }
-    }`,
-    {
-      itemIds: [String(itemId)],
-    }
-  );
+      )
+    );
 
-  return Boolean(
-    data.items?.[0]?.updates?.some(update =>
-      String(update.body || '').includes(PROPOSAL_USED_MARKER)
-    )
-  );
-}
+    // Keep the complete PDF in Monday.
+    if (proposalPdf) {
+      await addFileToColumn({
+        itemId:
+          tokenPayload.itemId,
 
-export async function markProposalSubmitted(itemId) {
-  await mondayRequest(
-    `mutation ($itemId: ID!, $body: String!) {
-      create_update(item_id: $itemId, body: $body) {
-        id
-      }
-    }`,
-    {
-      itemId: String(itemId),
-      body: `${PROPOSAL_USED_MARKER} This proposal link has been used.`,
+        columnId:
+          board.columns.proposal_pdf.id,
+
+        filepath:
+          proposalPdf.filepath,
+
+        filename:
+          proposalPdf.originalFilename ||
+          'proposal.pdf',
+
+        mimetype:
+          proposalPdf.mimetype ||
+          'application/pdf',
+      });
     }
-  );
+
+    const item =
+      await getProjectItem(
+        tokenPayload.itemId
+      );
+
+    const notifyName =
+      process.env
+        .QUOTATION_RESPONSE_NOTIFY_USER_NAME
+        ?.trim() || 'Uma';
+
+    const notifyUser =
+      process.env
+        .QUOTATION_RESPONSE_NOTIFY_USER_ID
+        ?.trim()
+        ? {
+            userId:
+              process.env
+                .QUOTATION_RESPONSE_NOTIFY_USER_ID
+                .trim(),
+          }
+        : await findSlackUser(
+            notifyName
+          );
+
+    const notifyMention =
+      getSlackMention(
+        notifyUser?.userId
+      ) || notifyName;
+
+    const mondayLink =
+      item?.url || '';
+
+    const mondayLinkText =
+      mondayLink
+        ? `<${mondayLink}|Open Monday Item>`
+        : 'Monday item unavailable';
+
+    const slackMessage = `:bell: *Quotation Response Received*
+:pinkline::pinkline::pinkline::pinkline::pinkline:
+
+${notifyMention}, a quotation response has been submitted for your request.
+
+:clipboard: *Proposal Details*
+
+*Project:* ${tokenPayload.projectName}
+*Project ID:* ${tokenPayload.itemId}
+
+*Investment:*
+${investment || 'Not provided'}
+
+*Deliverables:*
+${deliverables || 'Not provided'}
+
+*Deliverable Outcome:*
+${deliverableOutcome || 'Not provided'}
+
+*Deadline:*
+${deadlineLabel}
+
+:pinkline::pinkline::pinkline::pinkline::pinkline:
+
+:link: *Monday Item*
+
+${mondayLinkText}
+
+:pinkline::pinkline::pinkline::pinkline::pinkline:`;
+
+    await postToSlack(
+      slackMessage
+    );
+
+    // Make the proposal link unusable after submission.
+    await markProposalSubmitted(
+      tokenPayload.itemId
+    );
+
+    return res.status(200).json({
+      success: true,
+      projectId: String(
+        item?.id ||
+        tokenPayload.itemId
+      ),
+      message:
+        'Proposal submitted successfully',
+    });
+  } catch (error) {
+    console.error(
+      'Submit proposal error:',
+      error.message
+    );
+
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
 }
