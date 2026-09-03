@@ -562,7 +562,7 @@ export default function Home() {
                       '700',
                   }}
                 >
-                  Project Description *
+                  Project Objective *
                 </label>
 
                 <textarea
@@ -574,7 +574,7 @@ export default function Home() {
                   onChange={
                     updateForm
                   }
-                  placeholder="Describe the project, requirements, and expected deliverables"
+                  placeholder="Describe the project objective, requirements, and expected deliverables"
                   rows={7}
                   style={{
                     ...fieldStyle,
