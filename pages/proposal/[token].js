@@ -69,8 +69,15 @@ export default function ProposalForm() {
       )}`
     )
       .then(async response => {
-        const data =
-          await response.json();
+        const contentType =
+          response.headers.get('content-type') || '';
+
+        const data = contentType.includes('application/json')
+          ? await response.json()
+          : {
+              success: false,
+              error: `Server returned ${response.status} instead of JSON`,
+            };
 
         if (
           !response.ok ||
@@ -151,8 +158,15 @@ export default function ProposalForm() {
             }
           );
 
-        const result =
-          await response.json();
+        const contentType =
+          response.headers.get('content-type') || '';
+
+        const result = contentType.includes('application/json')
+          ? await response.json()
+          : {
+              success: false,
+              error: `Server returned ${response.status} instead of JSON`,
+            };
 
         if (
           !response.ok ||
