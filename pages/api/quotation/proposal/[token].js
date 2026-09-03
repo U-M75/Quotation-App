@@ -1,6 +1,5 @@
 import { IncomingForm } from 'formidable';
 import { verifyProposalToken } from '../../../../lib/token';
-
 import {
   findSlackUser,
   getSlackMention,
@@ -151,8 +150,7 @@ export default async function handler(req, res) {
         files.proposalPdf
       );
 
-    const requestedDays =
-      Number(deadlineDays);
+    const requestedDays = Number(deadlineDays);
 
     if (
       !estimatedHours ||
@@ -167,14 +165,7 @@ export default async function handler(req, res) {
       });
     }
 
-    const deadline = new Date();
-
-    deadline.setDate(
-      deadline.getDate() + requestedDays
-    );
-
-    const deadlineDate =
-      deadline.toISOString().slice(0, 10);
+    const deadlineLabel = `${requestedDays} ${requestedDays === 1 ? 'day' : 'days'}`;
 
     const board =
       await ensureBoardAndColumns();
@@ -190,26 +181,23 @@ export default async function handler(req, res) {
       });
     }
 
-    // Save estimated hours and calculated deadline to Monday.
-    // Investment, Deliverables, and Deliverable Outcome
-    // are sent to Slack only.
+    // Save the proposal fields to the same Monday item.
     await updateProjectColumns(
       board.boardId,
       tokenPayload.itemId,
       buildColumnValues(
         board.columns,
         {
-          estimated_hours:
-            estimatedHours,
-
-          deadline_date: {
-            date: deadlineDate,
-          },
+          estimated_hours: estimatedHours,
+          investment: investment,
+          deliverables: deliverables,
+          deliverable_outcome: deliverableOutcome,
+          deadline_days: deadlineLabel,
         }
       )
     );
 
-    // Keep the complete PDF in Monday.
+    // Keep the complete PDF in the Monday file column.
     if (proposalPdf) {
       await addFileToColumn({
         itemId:
@@ -268,6 +256,8 @@ export default async function handler(req, res) {
         ? `<${mondayLink}|Open Monday Item>`
         : 'Monday item unavailable';
 
+    // Professional message design matching New Project Request.
+    // Only quotation data is sent to Slack.
     const slackMessage = `:bell: *Quotation Response Received*
 :pinkline::pinkline::pinkline::pinkline::pinkline:
 
@@ -288,7 +278,7 @@ ${deliverables || 'Not provided'}
 ${deliverableOutcome || 'Not provided'}
 
 *Deadline:*
-${requestedDays} ${requestedDays === 1 ? 'day' : 'days'}
+${deadlineLabel}
 
 :pinkline::pinkline::pinkline::pinkline::pinkline:
 
@@ -302,7 +292,7 @@ ${mondayLinkText}
       slackMessage
     );
 
-    // Prevent the proposal link from being used again.
+    // Permanently invalidate the link after submission.
     await markProposalSubmitted(
       tokenPayload.itemId
     );
